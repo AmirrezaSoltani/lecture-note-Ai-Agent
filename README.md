@@ -124,7 +124,10 @@ curl -u admin:change-me -X POST http://127.0.0.1:8000/api/admin/backup
 
 ## OpenAI polishing for final notes
 
-This build can optionally polish the reviewed note blocks with the OpenAI API and keep the output JSON-structured.
+This build can optionally run a two-stage OpenAI flow:
+
+1. clean the reviewed note blocks, and
+2. build a student-facing `final_note` package from the reviewed blocks, markers, and transcript context.
 
 Set these environment variables:
 
@@ -136,5 +139,6 @@ Set these environment variables:
 Behavior:
 
 - `notes_source.json` keeps the review-aware source bundle used for recomposition.
-- `notes.json`, `notes.md`, `notes.html`, `notes.pdf`, and `notes.docx` are rendered from the polished bundle.
-- `llm_runtime.json` records whether polishing was applied, which model was used, how many chunks were sent, and the total time.
+- `notes.json`, `notes.md`, `notes.html`, `notes.pdf`, and `notes.docx` are rendered from the cleaned bundle.
+- `final_note.json`, `final_note.md`, `final_note.html`, and `final_note.pdf` are rendered from the final-note LLM output.
+- `llm_runtime.json` records the aggregated runtime for the cleanup + final-note stages, including chunked transcript digest calls when the transcript is large.

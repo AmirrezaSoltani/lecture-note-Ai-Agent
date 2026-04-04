@@ -560,6 +560,10 @@ def download_artifact(lecture_id: str, artifact_name: str) -> FileResponse:
         "notes-html": record.notes_html_path,
         "notes-pdf": record.notes_pdf_path,
         "notes-docx": record.notes_docx_path,
+        "final-note-json": None,
+        "final-note-md": None,
+        "final-note-html": None,
+        "final-note-pdf": None,
     }
     target = mapping.get(artifact_name)
     if not target:

@@ -8,10 +8,10 @@ from app.config import settings
 from app.models import ArtifactRecord, LectureNoteBundle
 from app.services.asr import ASRProvider, build_asr_provider, write_transcript_json
 from app.services.audio import AudioPreprocessor
-from app.services.exports import DocxExporter, HtmlExporter, JsonExporter, MarkdownExporter, PdfExporter
+from app.services.exports import DocxExporter, FinalNoteHtmlExporter, HtmlExporter, JsonExporter, MarkdownExporter, PdfExporter
 from app.services.markers import MarkerDetector
 from app.services.notes import NoteComposer
-from app.services.openai_notes import OpenAINotesPolisher
+from app.services.openai_notes import OpenAINotesPolisher, merge_llm_runtimes
 from app.services.performance import PipelinePerformanceReport, StageTimer, compute_throughput_audio_x
 from app.services.review import ReviewService
 from app.services.storage import ArtifactStorage
@@ -35,6 +35,7 @@ class LectureProcessingPipeline:
         self.json_exporter = JsonExporter()
         self.markdown_exporter = MarkdownExporter()
         self.html_exporter = HtmlExporter()
+        self.final_note_html_exporter = FinalNoteHtmlExporter()
         self.pdf_exporter = PdfExporter()
         self.docx_exporter = DocxExporter()
 
@@ -87,15 +88,19 @@ class LectureProcessingPipeline:
         review_timing = timer.checkpoint("review-apply")
 
         notes_polisher = self._resolve_notes_polisher()
-        polished_bundle, llm_runtime = notes_polisher.polish_bundle(reviewed_bundle, artifact_paths["llm_runtime"])
+        polished_bundle, polish_runtime = notes_polisher.polish_bundle(reviewed_bundle)
+        final_note_bundle, final_note_runtime = notes_polisher.generate_final_note(reviewed_bundle, polished_bundle)
+        llm_runtime = merge_llm_runtimes(polish_runtime, final_note_runtime)
+        artifact_paths["llm_runtime"].write_text(json.dumps(llm_runtime.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
         self._render_exports(polished_bundle, artifact_paths)
+        self._render_final_note_exports(final_note_bundle, artifact_paths)
         export_timing = timer.checkpoint("export")
 
         artifact_records = storage.build_artifact_records(artifact_paths)
         performance = self._build_performance_report(
             segments=segments,
             markers=markers,
-            note_block_count=len(polished_bundle.note_blocks),
+            note_block_count=len(final_note_bundle.note_blocks),
             preprocess_ms=preprocess_timing.duration_ms,
             transcribe_ms=transcribe_timing.duration_ms,
             marker_detection_ms=marker_timing.duration_ms,
@@ -131,8 +136,12 @@ class LectureProcessingPipeline:
         force_llm: bool = False,
     ) -> list[ArtifactRecord]:
         notes_polisher = self._resolve_notes_polisher(force_enabled=force_llm)
-        polished_bundle, _runtime = notes_polisher.polish_bundle(bundle, artifact_paths.get("llm_runtime"))
+        polished_bundle, polish_runtime = notes_polisher.polish_bundle(bundle)
+        final_note_bundle, final_note_runtime = notes_polisher.generate_final_note(bundle, polished_bundle)
+        combined_runtime = merge_llm_runtimes(polish_runtime, final_note_runtime)
+        artifact_paths["llm_runtime"].write_text(json.dumps(combined_runtime.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
         self._render_exports(polished_bundle, artifact_paths)
+        self._render_final_note_exports(final_note_bundle, artifact_paths)
         storage = ArtifactStorage(lecture_id=bundle.lecture_id, working_dir=artifact_paths["notes_json"].parent)
         return storage.build_artifact_records(artifact_paths)
 
@@ -145,6 +154,14 @@ class LectureProcessingPipeline:
             self.pdf_exporter.render_to_file(html_content, artifact_paths["notes_pdf"])
         if settings.enable_docx_export:
             self.docx_exporter.save(bundle, artifact_paths["notes_docx"])
+
+    def _render_final_note_exports(self, bundle: LectureNoteBundle, artifact_paths: dict[str, Path]) -> None:
+        self.json_exporter.save(bundle, artifact_paths["final_note_json"])
+        self.markdown_exporter.save(bundle, artifact_paths["final_note_md"])
+        html_content = self.final_note_html_exporter.render(bundle)
+        artifact_paths["final_note_html"].write_text(html_content, encoding="utf-8")
+        if settings.enable_pdf_export:
+            self.pdf_exporter.render_to_file(html_content, artifact_paths["final_note_pdf"])
 
     @staticmethod
     def _build_performance_report(

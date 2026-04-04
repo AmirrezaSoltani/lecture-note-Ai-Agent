@@ -74,5 +74,7 @@ def test_regenerate_reviewed_exports_persists_without_pipeline_method_error() ->
         assert (working_dir / "notes.json").exists()
         assert (working_dir / "notes.md").exists()
         assert (working_dir / "notes.html").exists()
+        assert (working_dir / "final_note.html").exists()
+        assert (working_dir / "final_note.pdf").exists()
     finally:
         shutil.rmtree(working_dir, ignore_errors=True)

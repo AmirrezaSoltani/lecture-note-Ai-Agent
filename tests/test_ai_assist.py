@@ -88,3 +88,59 @@ def test_openai_polisher_retries_timed_out_groups_by_splitting(monkeypatch) -> N
     assert runtime.applied is True
     assert runtime.chunk_count == 3
     assert "Recovered from 1 timeout split" in runtime.detail
+
+
+def test_openai_polisher_generates_final_note_from_bundle_and_transcript(monkeypatch) -> None:
+    bundle = LectureNoteBundle(
+        lecture_id="lecture-final",
+        lecture_title="Final Note Demo",
+        created_at=utc_now_iso(),
+        segments=[
+            TranscriptSegment(index=0, start_ms=0, end_ms=1000, text="Kesin çıkacak tanım budur."),
+            TranscriptSegment(index=1, start_ms=1000, end_ms=2000, text="Tedavide ilk basamak hidrasyondur."),
+        ],
+        markers=[],
+        note_blocks=[
+            NoteBlock(block_id="b1", block_type="main", title="Main Notes", content="- Kesin çıkacak tanım budur."),
+            NoteBlock(block_id="b2", block_type="exam", title="Exam Focus", content="- Tedavide ilk basamak hidrasyondur."),
+        ],
+    )
+    polisher = OpenAINotesPolisher(force_enabled=True)
+    polisher.api_key = "test-key"
+    polisher.enabled = True
+
+    captured_payloads = []
+
+    def fake_request_json(body):
+        payload = __import__("json").loads(body["messages"][1]["content"])
+        captured_payloads.append(payload)
+        schema_name = body["response_format"]["json_schema"]["name"]
+        if schema_name == "final_note":
+            return {
+                "choices": [{
+                    "message": {
+                        "content": __import__("json").dumps({
+                            "sections": [
+                                {
+                                    "block_id": "final-overview",
+                                    "block_type": "overview",
+                                    "title": "Overview",
+                                    "content": "- Kesin çıkacak tanım budur.\n- Tedavide ilk basamak hidrasyondur.",
+                                    "marker_types": [],
+                                    "source_segment_indexes": [0, 1],
+                                }
+                            ]
+                        })
+                    }
+                }]
+            }
+        raise AssertionError(f"Unexpected schema: {schema_name}")
+
+    monkeypatch.setattr(polisher, "_request_json", fake_request_json)
+    final_bundle, runtime = polisher.generate_final_note(bundle, bundle)
+
+    assert [block.title for block in final_bundle.note_blocks] == ["Overview"]
+    assert "hidrasyondur" in final_bundle.note_blocks[0].content
+    assert runtime.applied is True
+    assert captured_payloads[0]["reviewed_note_blocks"]
+    assert captured_payloads[0]["transcript_context"]["segments"]

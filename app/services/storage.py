@@ -24,6 +24,10 @@ class ArtifactStorage:
             "notes_html": self.working_dir / "notes.html",
             "notes_pdf": self.working_dir / "notes.pdf",
             "notes_docx": self.working_dir / "notes.docx",
+            "final_note_json": self.working_dir / "final_note.json",
+            "final_note_md": self.working_dir / "final_note.md",
+            "final_note_html": self.working_dir / "final_note.html",
+            "final_note_pdf": self.working_dir / "final_note.pdf",
             "runtime_info": self.working_dir / "runtime_info.json",
             "llm_runtime": self.working_dir / "llm_runtime.json",
         }
