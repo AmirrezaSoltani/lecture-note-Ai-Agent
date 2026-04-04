@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ title or "Lecture Note Builder" }}</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container">
+      <div>
+        <h1 class="site-title">Lecture Note Builder</h1>
+        <p class="site-subtitle">Fast lecture-to-notes pipeline with reviewable exam signals and structured exports.</p>
+      </div>
+      <nav class="header-nav">
+        <a href="/">Dashboard</a>
+        <a href="/settings">Settings</a>
+      </nav>
+    </div>
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

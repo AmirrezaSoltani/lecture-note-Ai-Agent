@@ -1,0 +1,84 @@
+{
+  "exam_high": {
+    "label": "Exam Focus",
+    "base_score": 10.0,
+    "context_window": 1,
+    "patterns": [
+      "kesin\\s+çıkacak",
+      "bu\\s+sorulacak",
+      "bir\\s+önceki\\s+sınavda?\\s+çıktı",
+      "bir\\s+önceki\\s+sınavda?\\s+soruldu",
+      "soru\\s+havuzunda\\s+var",
+      "sınavda\\s+soruldu",
+      "sorulmamış\\s+ama\\s+sorulabilir",
+      "\\b\\d+\\s*(x|kez|sefer)\\s+soruldu"
+    ]
+  },
+  "important_star": {
+    "label": "Important / Starred",
+    "base_score": 8.0,
+    "context_window": 1,
+    "patterns": [
+      "burası\\s+yıldızlı",
+      "yıldızı\\s+çak",
+      "burayı\\s+bileceksiniz",
+      "önemli",
+      "altını\\s+çizin",
+      "çok\\s+önemli"
+    ]
+  },
+  "memorize_exact": {
+    "label": "Memorize Exactly",
+    "base_score": 7.5,
+    "context_window": 0,
+    "patterns": [
+      "böyle\\s+ezberle",
+      "böyle\\s+kodla",
+      "aynen\\s+sorar",
+      "aynen\\s+böyle"
+    ]
+  },
+  "keyword": {
+    "label": "Keyword",
+    "base_score": 6.5,
+    "context_window": 0,
+    "patterns": [
+      "anahtar\\s+kelime",
+      "kilit\\s+kelime",
+      "şifre\\s+burası"
+    ]
+  },
+  "question": {
+    "label": "Question",
+    "base_score": 6.0,
+    "context_window": 0,
+    "patterns": [
+      "\\bsoru\\b",
+      "şöyle\\s+sorar",
+      "sınav\\s+sorusu",
+      "bunu\\s+sorabilir"
+    ]
+  },
+  "case": {
+    "label": "Case / Vaka",
+    "base_score": 5.5,
+    "context_window": 0,
+    "patterns": [
+      "\\bvaka\\b",
+      "\\bolgu\\b",
+      "hasta\\s+geliyor",
+      "klinik\\s+senaryo"
+    ]
+  },
+  "example": {
+    "label": "Example",
+    "base_score": 4.5,
+    "context_window": 0,
+    "patterns": [
+      "\\börnek\\b",
+      "örneğin",
+      "\\bmesela\\b",
+      "diyelim\\s+ki"
+    ]
+  }
+}

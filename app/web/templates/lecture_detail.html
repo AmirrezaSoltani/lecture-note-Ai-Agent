@@ -1,0 +1,526 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card detail-hero">
+  <div class="detail-head">
+    <div>
+      <h2>{{ lecture.title }}</h2>
+      <p class="muted">Lecture ID: {{ lecture.lecture_id }}</p>
+      <p class="muted">Audio: {{ lecture.audio_filename }}</p>
+      <p class="muted">Language: {{ lecture.language }}</p>
+      <p class="muted">Queue backend: {{ queue_backend }}</p>
+    </div>
+    <div>
+      <span id="live-status-badge" class="status status-{{ lecture.status }}">{{ lecture.status }}</span>
+    </div>
+  </div>
+
+  <div class="button-row">
+    {% if lecture.status in ["uploaded", "failed", "completed"] %}
+    <form method="post" action="/lectures/{{ lecture.lecture_id }}/process">
+      <button type="submit">Run Processing</button>
+    </form>
+    {% endif %}
+    {% if lecture.notes_json_path %}
+    <form method="post" action="/lectures/{{ lecture.lecture_id }}/review/regenerate-exports">
+      <button type="submit" class="secondary-button">Recompose Notes From Reviews</button>
+    </form>
+    {% endif %}
+  </div>
+
+  {% if lecture.error_message %}
+    <div class="alert alert-error">{{ lecture.error_message }}</div>
+  {% endif %}
+
+  {% if review_summary %}
+  <div class="summary-grid compact-grid">
+    <div class="summary-card summary-approved"><div class="summary-value">{{ review_summary.approved }}</div><div class="summary-label">Approved</div></div>
+    <div class="summary-card summary-pending"><div class="summary-value">{{ review_summary.pending }}</div><div class="summary-label">Pending</div></div>
+    <div class="summary-card summary-rejected"><div class="summary-value">{{ review_summary.rejected }}</div><div class="summary-label">Rejected</div></div>
+    <div class="summary-card summary-edited"><div class="summary-value">{{ review_summary.edited_blocks }}</div><div class="summary-label">Edited blocks</div></div>
+    <div class="summary-card summary-approved"><div class="summary-value">{{ review_summary.approved_markers }}</div><div class="summary-label">Approved markers used first</div></div>
+    <div class="summary-card summary-pending"><div class="summary-value">{{ review_summary.visible_markers }}</div><div class="summary-label">Visible markers in notes</div></div>
+  </div>
+  {% endif %}
+
+  <div class="download-links">
+    <a href="/api/lectures/{{ lecture.lecture_id }}/status">Status API</a>
+    <a href="/api/lectures/{{ lecture.lecture_id }}/performance">Performance API</a>
+    {% if lecture.notes_json_path %}
+      <a href="/lectures/{{ lecture.lecture_id }}/download/transcript">Transcript JSON</a>
+      <a href="/lectures/{{ lecture.lecture_id }}/download/notes-json">Notes JSON</a>
+      <a href="/lectures/{{ lecture.lecture_id }}/download/notes-review">Review JSON</a>
+      <a href="/lectures/{{ lecture.lecture_id }}/download/notes-md">Notes Markdown</a>
+      <a href="/lectures/{{ lecture.lecture_id }}/download/notes-html">Notes HTML</a>
+    {% endif %}
+    {% if lecture.notes_pdf_path %}<a href="/lectures/{{ lecture.lecture_id }}/download/notes-pdf">Notes PDF</a>{% endif %}
+    {% if lecture.notes_docx_path %}<a href="/lectures/{{ lecture.lecture_id }}/download/notes-docx">Notes DOCX</a>{% endif %}
+  </div>
+</section>
+
+
+<section class="card live-monitor-card" id="live-monitor" data-lecture-id="{{ lecture.lecture_id }}" data-live-endpoint="/api/lectures/{{ lecture.lecture_id }}/live" data-initial-status="{{ lecture.status }}">
+  <div class="section-head">
+    <div>
+      <h2>Live Monitoring</h2>
+      <p class="muted">Auto-refreshes processing state, queue activity, elapsed time, stage timings, and output availability.</p>
+    </div>
+    <div class="inline-badges">
+      <button type="button" id="live-llm-trigger" data-trigger-url="/api/lectures/{{ lecture.lecture_id }}/llm-assistant/run" {% if not note_payload %}disabled{% endif %}>Run LLM Assistant</button>
+      <span class="pill pill-pending" id="live-auto-pill">Auto refresh on</span>
+      <span class="pill pill-approved" id="live-last-updated">server snapshot ready</span>
+    </div>
+  </div>
+  <p class="muted live-llm-helper" id="live-llm-helper">Manually re-run the LLM assistant on the current reviewed notes when you want cleanup after transcription finishes.</p>
+  <div class="live-grid">
+    <div class="live-panel">
+      <div class="live-metric-row">
+        <div class="live-metric"><div class="muted">Stage</div><strong id="live-stage">{{ lecture.status }}</strong></div>
+        <div class="live-metric"><div class="muted">Queue depth</div><strong id="live-queue-depth">{{ jobs|length if lecture.status == 'processing' else 0 }}</strong></div>
+        <div class="live-metric"><div class="muted">Active workers</div><strong id="live-active-workers">{{ active_workers }}</strong></div>
+        <div class="live-metric"><div class="muted">Artifacts</div><strong id="live-artifact-count">{{ artifacts|length }}</strong></div>
+      </div>
+      <div class="progress-shell" aria-label="Processing progress">
+        <div class="progress-bar" id="live-progress-bar" style="width:{% if lecture.status == 'completed' %}100{% elif lecture.status == 'processing' %}55{% else %}5{% endif %}%"></div>
+      </div>
+      <div class="live-metric-row compact-row">
+        <div class="live-metric"><div class="muted">Elapsed</div><strong id="live-elapsed">—</strong></div>
+        <div class="live-metric"><div class="muted">Queue wait</div><strong id="live-queue-wait">—</strong></div>
+        <div class="live-metric"><div class="muted">Throughput</div><strong id="live-throughput">{% if performance_run %}{{ '%.2f'|format(performance_run.throughput_audio_x) }}x{% else %}—{% endif %}</strong></div>
+        <div class="live-metric"><div class="muted">Audio / Total</div><strong id="live-audio-total">{% if performance_run %}{{ '%.1f'|format(performance_run.audio_duration_ms / 60000) }}m / {{ '%.1f'|format(performance_run.total_ms / 60000) }}m{% else %}—{% endif %}</strong></div>
+      </div>
+      <div class="live-stage-list asr-runtime-list">
+        <div class="live-stage-item"><span>ASR provider</span><strong id="live-asr-provider">{{ asr_runtime.provider if asr_runtime else '—' }}</strong></div>
+        <div class="live-stage-item"><span>Model / backend</span><strong id="live-asr-model">{% if asr_runtime %}{{ asr_runtime.model_size }} / {{ asr_runtime.model_backend }}{% else %}—{% endif %}</strong></div>
+        <div class="live-stage-item"><span>Requested device</span><strong id="live-requested-device">{% if asr_runtime %}{{ asr_runtime.requested_device }} / {{ asr_runtime.requested_compute_type }}{% else %}—{% endif %}</strong></div>
+        <div class="live-stage-item"><span>Actual device</span><strong id="live-actual-device">{% if asr_runtime %}{{ asr_runtime.actual_device }} / {{ asr_runtime.actual_compute_type }}{% else %}—{% endif %}</strong></div>
+        <div class="live-stage-item"><span>Detected language</span><strong id="live-detected-language">{% if asr_runtime %}{{ asr_runtime.detected_language or '—' }}{% else %}—{% endif %}</strong></div>
+        <div class="live-stage-item"><span>LLM notes</span><strong id="live-llm-status">{% if llm_runtime %}{{ llm_runtime.status }}{% else %}—{% endif %}</strong></div>
+        <div class="live-stage-item"><span>LLM model</span><strong id="live-llm-model">{% if llm_runtime %}{{ llm_runtime.model or '—' }}{% else %}—{% endif %}</strong></div>
+        <div class="live-stage-item"><span>LLM chunks / time</span><strong id="live-llm-chunks">{% if llm_runtime %}{{ llm_runtime.chunk_count or 0 }} / {{ '%.1f'|format((llm_runtime.total_ms or 0) | float) }} ms{% else %}—{% endif %}</strong></div>
+      </div>
+    </div>
+    <div class="live-panel">
+      <div class="live-stage-list">
+        <div class="live-stage-item"><span>Preprocess</span><strong id="live-preprocess-ms">{% if performance_run %}{{ '%.1f'|format(performance_run.preprocess_ms) }} ms{% else %}—{% endif %}</strong></div>
+        <div class="live-stage-item"><span>Transcribe</span><strong id="live-transcribe-ms">{% if performance_run %}{{ '%.1f'|format(performance_run.transcribe_ms) }} ms{% else %}—{% endif %}</strong></div>
+        <div class="live-stage-item"><span>Markers</span><strong id="live-marker-ms">{% if performance_run %}{{ '%.1f'|format(performance_run.marker_detection_ms) }} ms{% else %}—{% endif %}</strong></div>
+        <div class="live-stage-item"><span>Compose</span><strong id="live-compose-ms">{% if performance_run %}{{ '%.1f'|format(performance_run.note_compose_ms) }} ms{% else %}—{% endif %}</strong></div>
+        <div class="live-stage-item"><span>Review</span><strong id="live-review-ms">{% if performance_run %}{{ '%.1f'|format(performance_run.review_apply_ms) }} ms{% else %}—{% endif %}</strong></div>
+        <div class="live-stage-item"><span>Export</span><strong id="live-export-ms">{% if performance_run %}{{ '%.1f'|format(performance_run.export_ms) }} ms{% else %}—{% endif %}</strong></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="card split-grid">
+  <div>
+    <h2>Processing Jobs</h2>
+    {% if jobs %}
+      <div class="job-list">
+        {% for job in jobs %}
+          <div class="job-item">
+            <div><strong>{{ job.job_id[:8] }}</strong> · <span class="status status-job-{{ job.status }}">{{ job.status }}</span></div>
+            <div class="muted">Queued: {{ job.queued_at[:19] }}</div>
+            {% if job.started_at %}<div class="muted">Started: {{ job.started_at[:19] }}</div>{% endif %}
+            {% if job.finished_at %}<div class="muted">Finished: {{ job.finished_at[:19] }}</div>{% endif %}
+            {% if job.error_message %}<div class="muted">{{ job.error_message }}</div>{% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p>No processing jobs yet.</p>
+    {% endif %}
+  </div>
+
+  <div>
+    <h2>Artifact Inventory</h2>
+    {% if artifacts %}
+      <div class="job-list">
+        {% for artifact in artifacts %}
+          <div class="job-item">
+            <div><strong>{{ artifact.artifact_type }}</strong></div>
+            <div class="muted">{{ artifact.content_type }}</div>
+            <div class="muted">{{ artifact.file_size_bytes }} bytes</div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p>No artifacts yet.</p>
+    {% endif %}
+  </div>
+</section>
+
+
+{% if performance_run %}
+<section class="card split-grid">
+  <div>
+    <h2>Latest Performance Run</h2>
+    <div class="summary-grid compact-grid">
+      <div class="summary-card summary-approved"><div class="summary-value">{{ "%.1f"|format(performance_run.total_ms) }} ms</div><div class="summary-label">Total runtime</div></div>
+      <div class="summary-card summary-pending"><div class="summary-value">{{ "%.2f"|format(performance_run.throughput_audio_x) }}x</div><div class="summary-label">Audio throughput</div></div>
+      <div class="summary-card summary-edited"><div class="summary-value">{{ performance_run.segment_count }}</div><div class="summary-label">Segments</div></div>
+      <div class="summary-card summary-approved"><div class="summary-value">{{ performance_run.marker_count }}</div><div class="summary-label">Markers</div></div>
+      <div class="summary-card summary-pending"><div class="summary-value">{{ performance_run.note_block_count }}</div><div class="summary-label">Note blocks</div></div>
+      <div class="summary-card summary-rejected"><div class="summary-value">{{ active_workers }}</div><div class="summary-label">Active workers</div></div>
+    </div>
+  </div>
+  <div>
+    <h2>Stage Breakdown</h2>
+    <div class="job-list">
+      <div class="job-item"><strong>Preprocess</strong><div class="muted">{{ "%.1f"|format(performance_run.preprocess_ms) }} ms</div></div>
+      <div class="job-item"><strong>Transcribe</strong><div class="muted">{{ "%.1f"|format(performance_run.transcribe_ms) }} ms</div></div>
+      <div class="job-item"><strong>Markers</strong><div class="muted">{{ "%.1f"|format(performance_run.marker_detection_ms) }} ms</div></div>
+      <div class="job-item"><strong>Compose</strong><div class="muted">{{ "%.1f"|format(performance_run.note_compose_ms) }} ms</div></div>
+      <div class="job-item"><strong>Review</strong><div class="muted">{{ "%.1f"|format(performance_run.review_apply_ms) }} ms</div></div>
+      <div class="job-item"><strong>Export</strong><div class="muted">{{ "%.1f"|format(performance_run.export_ms) }} ms</div></div>
+    </div>
+  </div>
+</section>
+{% endif %}
+
+{% if note_payload %}
+<section class="card">
+  <div class="section-head">
+    <div>
+      <h2>Review Workspace</h2>
+      <p class="muted">Search markers and transcript together, bulk-review visible matches, and inspect transcript, markers, and notes side by side.</p>
+    </div>
+    <div class="inline-badges">
+      <span class="pill pill-pending">{{ filter_summary.visible_markers }} markers visible</span>
+      <span class="pill pill-approved">{{ filter_summary.visible_segments }} transcript rows visible</span>
+    </div>
+  </div>
+
+  <form method="get" action="/lectures/{{ lecture.lecture_id }}" class="filter-grid">
+    <label>
+      Marker search
+      <input type="text" name="q" value="{{ filters.q }}" placeholder="search marker text, labels, notes">
+    </label>
+    <label>
+      Marker type
+      <select name="marker_type">
+        <option value="">all</option>
+        {% for option in marker_type_options %}
+          <option value="{{ option }}" {% if filters.marker_type == option %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Review state
+      <select name="review_state">
+        <option value="">all</option>
+        {% for option in review_state_options %}
+          <option value="{{ option }}" {% if filters.review_state == option %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Transcript search
+      <input type="text" name="transcript_q" value="{{ filters.transcript_q }}" placeholder="search transcript text">
+    </label>
+    <div class="filter-actions">
+      <button type="submit">Apply Filters</button>
+      <a class="plain-link" href="/lectures/{{ lecture.lecture_id }}#review-workspace">Reset</a>
+    </div>
+  </form>
+
+  <form method="post" action="/lectures/{{ lecture.lecture_id }}/review/markers/bulk" class="bulk-form" id="review-workspace">
+    <input type="hidden" name="marker_ids" value="{{ marker_ids_csv }}">
+    <input type="hidden" name="marker_type" value="{{ filters.marker_type }}">
+    <input type="hidden" name="current_state" value="{{ filters.review_state }}">
+    <input type="hidden" name="text_query" value="{{ filters.q }}">
+    <div class="bulk-row">
+      <label>
+        Bulk action on visible markers
+        <select name="review_state">
+          <option value="approved">approve visible</option>
+          <option value="rejected">reject visible</option>
+          <option value="pending">set visible to pending</option>
+        </select>
+      </label>
+      <button type="submit" class="secondary-button">Apply Bulk Review</button>
+    </div>
+  </form>
+</section>
+
+<section class="review-columns">
+  <section class="card review-column transcript-column" id="transcript-preview">
+    <div class="section-head sticky-head">
+      <h2>Transcript</h2>
+      <span class="muted">related segments are highlighted</span>
+    </div>
+    {% if transcript_payload %}
+    <div class="segment-list transcript-list">
+      {% for segment in transcript_payload %}
+      <article class="segment-item {% if segment.is_related %}segment-related{% endif %}" id="segment-{{ segment.index }}">
+        <div class="segment-time">{{ "%.2f"|format(segment.start_ms / 1000) }}s → {{ "%.2f"|format(segment.end_ms / 1000) }}s · segment {{ segment.index }}</div>
+        <div>{{ segment.text }}</div>
+        {% set segment_markers = markers_by_segment.get(segment.index, []) %}
+        {% if segment_markers %}
+        <div class="inline-badges transcript-badges">
+          {% for marker in segment_markers %}
+          <a class="pill pill-{{ marker.review_state }}" href="#marker-{{ marker.marker_id }}">{{ marker.label }}</a>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p>No transcript rows match the current filters.</p>
+    {% endif %}
+  </section>
+
+  <section class="card review-column markers-column" id="marker-preview">
+    <div class="section-head sticky-head">
+      <h2>Marker Review Panel</h2>
+      <span class="muted">quick actions keep your filters</span>
+    </div>
+    {% if grouped_markers %}
+      {% for marker_type, items in grouped_markers.items() %}
+        <div class="marker-group">
+          <h3>{{ marker_type }}</h3>
+          <ul class="marker-list">
+            {% for marker in items %}
+              <li id="marker-{{ marker.marker_id }}" class="marker-item review-{{ marker.review_state }}">
+                <div class="marker-topline">
+                  <strong>{{ marker.label }}</strong>
+                  <span class="pill pill-{{ marker.review_state }}">{{ marker.review_state }}</span>
+                  <span class="muted">score {{ "%.1f"|format(marker.score) }} · {{ marker.source }} · segment <a href="#segment-{{ marker.source_segment_index }}">{{ marker.source_segment_index }}</a></span>
+                </div>
+                <div class="marker-text">{{ marker.text }}</div>
+                <div class="muted">match: {{ marker.matched_phrase }}</div>
+                {% if marker.reviewer_note %}<div class="muted">review note: {{ marker.reviewer_note }}</div>{% endif %}
+                <div class="quick-actions">
+                  <a class="mini-action approve-link" href="/lectures/{{ lecture.lecture_id }}/review/marker/{{ marker.marker_id }}/approved?q={{ filters.q | urlencode }}&marker_type={{ filters.marker_type | urlencode }}&review_state={{ filters.review_state | urlencode }}&transcript_q={{ filters.transcript_q | urlencode }}">Approve</a>
+                  <a class="mini-action reject-link" href="/lectures/{{ lecture.lecture_id }}/review/marker/{{ marker.marker_id }}/rejected?q={{ filters.q | urlencode }}&marker_type={{ filters.marker_type | urlencode }}&review_state={{ filters.review_state | urlencode }}&transcript_q={{ filters.transcript_q | urlencode }}">Reject</a>
+                  <a class="mini-action pending-link" href="/lectures/{{ lecture.lecture_id }}/review/marker/{{ marker.marker_id }}/pending?q={{ filters.q | urlencode }}&marker_type={{ filters.marker_type | urlencode }}&review_state={{ filters.review_state | urlencode }}&transcript_q={{ filters.transcript_q | urlencode }}">Set Pending</a>
+                </div>
+                <form method="post" action="/lectures/{{ lecture.lecture_id }}/review/marker/{{ marker.marker_id }}" class="marker-form compact-form">
+                  <input type="hidden" name="q" value="{{ filters.q }}">
+                  <input type="hidden" name="marker_type" value="{{ filters.marker_type }}">
+                  <input type="hidden" name="current_state" value="{{ filters.review_state }}">
+                  <input type="hidden" name="transcript_q" value="{{ filters.transcript_q }}">
+                  <label>
+                    Review state
+                    <select name="review_state">
+                      <option value="pending" {% if marker.review_state == 'pending' %}selected{% endif %}>pending</option>
+                      <option value="approved" {% if marker.review_state == 'approved' %}selected{% endif %}>approved</option>
+                      <option value="rejected" {% if marker.review_state == 'rejected' %}selected{% endif %}>rejected</option>
+                    </select>
+                  </label>
+                  <label>
+                    Reviewer note
+                    <input type="text" name="reviewer_note" value="{{ marker.reviewer_note or '' }}" placeholder="optional note">
+                  </label>
+                  <button type="submit">Save Marker Review</button>
+                </form>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endfor %}
+    {% else %}
+      <p>No markers detected yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="card review-column notes-column">
+    <div class="section-head sticky-head">
+      <h2>Structured Notes Review</h2>
+      <span class="muted">edit note blocks while inspecting transcript and markers</span>
+    </div>
+    {% for block in note_payload.note_blocks %}
+      <article class="note-block block-{{ block.block_type }}" id="block-{{ block.block_id }}">
+        <div class="review-heading">
+          <h3>{{ block.title }}</h3>
+          <div class="inline-badges">
+            {% if block.edited %}<span class="pill pill-edited">Edited</span>{% endif %}
+            {% for marker_type in block.marker_types %}<span class="pill pill-pending">{{ marker_type }}</span>{% endfor %}
+          </div>
+        </div>
+        <form method="post" action="/lectures/{{ lecture.lecture_id }}/review/block/{{ block.block_id }}" class="review-form compact-form">
+          <label>
+            Block title
+            <input type="text" name="title" value="{{ block.title }}" required>
+          </label>
+          <label>
+            Block content
+            <textarea name="content" rows="8" required>{{ block.content }}</textarea>
+          </label>
+          <div class="source-meta">Source segments:
+            {% if block.source_segment_indexes %}
+              {% for source_index in block.source_segment_indexes %}
+                <a href="#segment-{{ source_index }}">{{ source_index }}</a>{% if not loop.last %}, {% endif %}
+              {% endfor %}
+            {% else %}
+              none
+            {% endif %}
+          </div>
+          <button type="submit">Save Block</button>
+        </form>
+      </article>
+    {% endfor %}
+  </section>
+</section>
+{% endif %}
+
+<script>
+(() => {
+  const root = document.getElementById("live-monitor");
+  if (!root) return;
+  const lectureId = root.dataset.lectureId;
+  const liveEndpoint = root.dataset.liveEndpoint;
+  const statusBadge = document.getElementById("live-status-badge");
+  const autoPill = document.getElementById("live-auto-pill");
+  const lastUpdated = document.getElementById("live-last-updated");
+  const fields = {
+    stage: document.getElementById("live-stage"),
+    queueDepth: document.getElementById("live-queue-depth"),
+    activeWorkers: document.getElementById("live-active-workers"),
+    artifactCount: document.getElementById("live-artifact-count"),
+    elapsed: document.getElementById("live-elapsed"),
+    queueWait: document.getElementById("live-queue-wait"),
+    throughput: document.getElementById("live-throughput"),
+    audioTotal: document.getElementById("live-audio-total"),
+    preprocess: document.getElementById("live-preprocess-ms"),
+    transcribe: document.getElementById("live-transcribe-ms"),
+    marker: document.getElementById("live-marker-ms"),
+    compose: document.getElementById("live-compose-ms"),
+    review: document.getElementById("live-review-ms"),
+    exportMs: document.getElementById("live-export-ms"),
+    progressBar: document.getElementById("live-progress-bar"),
+    asrProvider: document.getElementById("live-asr-provider"),
+    asrModel: document.getElementById("live-asr-model"),
+    requestedDevice: document.getElementById("live-requested-device"),
+    actualDevice: document.getElementById("live-actual-device"),
+    detectedLanguage: document.getElementById("live-detected-language"),
+    llmStatus: document.getElementById("live-llm-status"),
+    llmModel: document.getElementById("live-llm-model"),
+    llmChunks: document.getElementById("live-llm-chunks"),
+    llmTrigger: document.getElementById("live-llm-trigger"),
+    llmHelper: document.getElementById("live-llm-helper"),
+  };
+
+  const fmtMs = (value) => {
+    if (value === null || value === undefined) return "—";
+    if (value >= 60000) return `${(value / 60000).toFixed(2)} min`;
+    if (value >= 1000) return `${(value / 1000).toFixed(1)} s`;
+    return `${value.toFixed(1)} ms`;
+  };
+
+  const setStatusClass = (status) => {
+    if (!statusBadge) return;
+    statusBadge.textContent = status;
+    statusBadge.className = `status status-${status}`;
+  };
+
+  const updateFromSnapshot = (snapshot) => {
+    const lecture = snapshot.lecture || {};
+    const perf = snapshot.performance || null;
+    const runtime = snapshot.asr_runtime || null;
+    const timeline = snapshot.timeline || {};
+    setStatusClass(lecture.status || root.dataset.initialStatus || "uploaded");
+    fields.stage.textContent = timeline.stage || lecture.status || "unknown";
+    fields.queueDepth.textContent = String(snapshot.queue_depth ?? "0");
+    fields.activeWorkers.textContent = String(snapshot.active_workers ?? "0");
+    fields.artifactCount.textContent = String(snapshot.artifact_count ?? "0");
+    fields.elapsed.textContent = fmtMs(timeline.elapsed_ms);
+    fields.queueWait.textContent = fmtMs(timeline.queue_wait_ms);
+    fields.progressBar.style.width = `${timeline.progress_pct ?? 0}%`;
+    if (perf) {
+      fields.throughput.textContent = `${Number(perf.throughput_audio_x || 0).toFixed(2)}x`;
+      fields.audioTotal.textContent = `${(Number(perf.audio_duration_ms || 0) / 60000).toFixed(1)}m / ${(Number(perf.total_ms || 0) / 60000).toFixed(1)}m`;
+      fields.preprocess.textContent = fmtMs(perf.preprocess_ms);
+      fields.transcribe.textContent = fmtMs(perf.transcribe_ms);
+      fields.marker.textContent = fmtMs(perf.marker_detection_ms);
+      fields.compose.textContent = fmtMs(perf.note_compose_ms);
+      fields.review.textContent = fmtMs(perf.review_apply_ms);
+      fields.exportMs.textContent = fmtMs(perf.export_ms);
+    }
+    if (runtime) {
+      fields.asrProvider.textContent = runtime.provider || "—";
+      fields.asrModel.textContent = `${runtime.model_size || "—"} / ${runtime.model_backend || "—"}`;
+      fields.requestedDevice.textContent = `${runtime.requested_device || "—"} / ${runtime.requested_compute_type || "—"}`;
+      fields.actualDevice.textContent = `${runtime.actual_device || "—"} / ${runtime.actual_compute_type || "—"}`;
+      fields.detectedLanguage.textContent = runtime.detected_language || "—";
+    }
+    const llm = snapshot.llm_runtime || null;
+    if (fields.llmStatus) {
+      fields.llmStatus.textContent = llm ? (llm.status || "—") : "—";
+      fields.llmModel.textContent = llm ? (llm.model || "—") : "—";
+      fields.llmChunks.textContent = llm ? `${llm.chunk_count || 0} / ${fmtMs(Number(llm.total_ms || 0))}` : "—";
+      if (fields.llmHelper) {
+        if (llm && llm.detail) {
+          fields.llmHelper.textContent = llm.detail;
+        } else if (llm && llm.status === "applied") {
+          fields.llmHelper.textContent = "LLM polishing finished successfully for the current reviewed notes.";
+        } else if (llm && llm.status === "running") {
+          fields.llmHelper.textContent = "Manual LLM assistant is running...";
+        } else if (llm && llm.status === "disabled") {
+          fields.llmHelper.textContent = "Manual LLM runs need a reachable OpenAI endpoint and a valid API key.";
+        }
+      }
+    }
+    const canRunLlm = Boolean((snapshot.lecture || {}).notes_json_path);
+    if (fields.llmTrigger) {
+      const running = llm && llm.status === "running";
+      fields.llmTrigger.disabled = !canRunLlm || running;
+      fields.llmTrigger.textContent = running ? "LLM Assistant Running..." : (llm && llm.status === "applied" ? "Run LLM Assistant Again" : "Run LLM Assistant");
+    }
+    const serverTime = snapshot.server_time ? new Date(snapshot.server_time) : new Date();
+    lastUpdated.textContent = `updated ${serverTime.toLocaleTimeString()}`;
+  };
+
+  if (fields.llmTrigger) {
+    fields.llmTrigger.addEventListener("click", async () => {
+      const triggerUrl = fields.llmTrigger.dataset.triggerUrl;
+      if (!triggerUrl || fields.llmTrigger.disabled) return;
+      fields.llmTrigger.disabled = true;
+      fields.llmTrigger.textContent = "Starting LLM Assistant...";
+      if (fields.llmHelper) {
+        fields.llmHelper.textContent = "Manual LLM assistant requested. Waiting for the next live snapshot...";
+      }
+      try {
+        const response = await fetch(triggerUrl, { method: "POST", headers: { "Accept": "application/json" } });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.detail || `HTTP ${response.status}`);
+        }
+        fields.llmStatus.textContent = (payload.llm_runtime && payload.llm_runtime.status) || payload.status || "running";
+        fields.llmModel.textContent = (payload.llm_runtime && payload.llm_runtime.model) || fields.llmModel.textContent || "—";
+        fields.llmChunks.textContent = (payload.llm_runtime && `${payload.llm_runtime.chunk_count || 0} / ${fmtMs(Number(payload.llm_runtime.total_ms || 0))}`) || "0 / 0.0 ms";
+        fields.llmTrigger.textContent = "LLM Assistant Running...";
+        window.setTimeout(poll, 900);
+      } catch (error) {
+        fields.llmTrigger.disabled = false;
+        fields.llmTrigger.textContent = "Run LLM Assistant";
+        if (fields.llmHelper) {
+          fields.llmHelper.textContent = error.message || "Could not start the LLM assistant.";
+        }
+      }
+    });
+  }
+
+  let failureCount = 0;
+  const poll = async () => {
+    try {
+      const response = await fetch(liveEndpoint || `/api/lectures/${lectureId}/live`, { headers: { "Accept": "application/json" } });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const snapshot = await response.json();
+      updateFromSnapshot(snapshot);
+      failureCount = 0;
+      const terminal = ["completed", "failed"].includes((snapshot.lecture || {}).status);
+      autoPill.textContent = terminal ? "Auto refresh slowed" : "Auto refresh on";
+      window.setTimeout(poll, terminal ? 12000 : 4000);
+    } catch (error) {
+      failureCount += 1;
+      autoPill.textContent = `Refresh retry ${failureCount}`;
+      window.setTimeout(poll, 7000);
+    }
+  };
+  window.setTimeout(poll, 1200);
+})();
+</script>
+
+{% endblock %}

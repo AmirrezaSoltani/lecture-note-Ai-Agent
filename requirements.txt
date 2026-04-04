@@ -1,0 +1,10 @@
+fastapi>=0.115.0
+uvicorn>=0.30.0
+jinja2>=3.1.4
+python-multipart>=0.0.9
+pydantic>=2.7.0
+weasyprint>=62.3; platform_system != "Windows"
+python-docx>=1.1.2
+faster-whisper>=1.0.3
+rq>=1.16.2
+redis>=5.0.7

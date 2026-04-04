@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero card">
+  <div>
+    <h2>Upload New Lecture</h2>
+    <p class="muted">Queue backend: <strong>{{ queue_backend }}</strong></p>
+  </div>
+  <form class="upload-form" method="post" action="/lectures" enctype="multipart/form-data">
+    <label>
+      Title
+      <input type="text" name="title" placeholder="Example: Infectious Diseases - Week 4" required>
+    </label>
+    <label>
+      Language
+      <input type="text" name="language" value="{{ default_language }}" placeholder="tr or auto" required>
+    </label>
+    <label>
+      Audio file
+      <input type="file" name="audio_file" accept=".mp3,.wav,.m4a,.aac,.ogg,.flac" required>
+    </label>
+    <button type="submit">Create Lecture</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Lectures</h2>
+  {% if lectures %}
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Title</th>
+          <th>Status</th>
+          <th>Language</th>
+          <th>Created</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for lecture in lectures %}
+        <tr>
+          <td>{{ lecture.title }}</td>
+          <td><span class="status status-{{ lecture.status }}">{{ lecture.status }}</span></td>
+          <td>{{ lecture.language }}</td>
+          <td>{{ lecture.created_at[:19] }}</td>
+          <td><a href="/lectures/{{ lecture.lecture_id }}">Open</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>No lectures yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

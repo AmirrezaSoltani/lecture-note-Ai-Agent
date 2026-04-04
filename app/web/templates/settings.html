@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card settings-hero">
+  <div>
+    <h2>Runtime Settings</h2>
+    <p class="muted">Edit operational configuration from the UI. Most values apply to new requests immediately. Some infrastructure settings still need an app restart.</p>
+    <p class="muted">Overrides file: <code>{{ overrides_path }}</code></p>
+  </div>
+  <div class="button-row">
+    <a class="button-link" href="/settings/export.env">Download current .env</a>
+    <button type="button" class="secondary-button" id="openai-test-trigger">Test OpenAI Connection</button>
+    <form method="post" action="/settings/reset" onsubmit="return confirm('Reset all UI overrides and go back to environment defaults?');">
+      <button type="submit" class="secondary-button">Reset UI Overrides</button>
+    </form>
+  </div>
+</section>
+
+<div class="alert alert-info" id="openai-test-result" hidden></div>
+
+{% if save_result == "saved" %}
+  <div class="alert alert-success">Settings saved successfully.</div>
+{% elif save_result == "error" %}
+  <div class="alert alert-error">{{ error_detail or 'Some settings could not be saved.' }}</div>
+{% endif %}
+
+<section class="card settings-notes">
+  <div class="summary-grid compact-grid">
+    <div class="summary-card summary-approved"><div class="summary-value">{{ settings_groups|length }}</div><div class="summary-label">Groups</div></div>
+    <div class="summary-card summary-pending"><div class="summary-value">{{ restart_required_count }}</div><div class="summary-label">Fields that may need restart</div></div>
+    <div class="summary-card summary-edited"><div class="summary-value">UI</div><div class="summary-label">Source of overrides</div></div>
+    <div class="summary-card summary-approved"><div class="summary-value">.env</div><div class="summary-label">Exportable any time</div></div>
+  </div>
+</section>
+
+<form method="post" action="/settings" class="settings-form-shell">
+  {% for group in settings_groups %}
+  <section class="card settings-group-card">
+    <div class="section-head sticky-head">
+      <div>
+        <h2>{{ group.name }}</h2>
+        <p class="muted">Values shown here are the current effective runtime values.</p>
+      </div>
+    </div>
+
+    <div class="settings-grid">
+      {% for entry in group.entries %}
+      <article class="setting-item {% if entry.is_overridden %}setting-item-overridden{% endif %}">
+        <div class="setting-item-head">
+          <div>
+            <h3>{{ entry.label }}</h3>
+            <p class="muted setting-env-name">{{ entry.env_name }}</p>
+          </div>
+          <div class="inline-badges">
+            {% if entry.is_overridden %}<span class="pill pill-edited">UI override</span>{% endif %}
+            {% if entry.restart_required %}<span class="pill pill-pending">restart likely</span>{% endif %}
+            {% if entry.secret %}<span class="pill pill-approved">secret</span>{% endif %}
+          </div>
+        </div>
+
+        {% if entry.description %}
+        <p class="setting-description">{{ entry.description }}</p>
+        {% endif %}
+        <p class="setting-current">Current: <strong>{{ entry.current_value }}</strong></p>
+
+        {% if entry.kind == "bool" %}
+          <label>
+            New value
+            <select name="{{ entry.attr_name }}">
+              <option value="true" {% if entry.raw_value == 'true' %}selected{% endif %}>true</option>
+              <option value="false" {% if entry.raw_value == 'false' %}selected{% endif %}>false</option>
+            </select>
+          </label>
+        {% elif entry.kind == "select" %}
+          <label>
+            New value
+            <select name="{{ entry.attr_name }}">
+              {% for option in entry.options %}
+                <option value="{{ option }}" {% if entry.raw_value == option %}selected{% endif %}>{{ option }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        {% else %}
+          <label>
+            {% if entry.secret %}New value{% else %}New value{% endif %}
+            <input
+              type="text"
+              name="{{ entry.attr_name }}"
+              value="{{ entry.raw_value }}"
+              placeholder="{% if entry.secret and entry.is_set %}leave blank to keep current secret{% else %}{{ entry.placeholder or entry.current_value }}{% endif %}"
+              autocomplete="off"
+            >
+          </label>
+        {% endif %}
+
+        {% if entry.secret %}
+        <label class="checkbox-line">
+          <input type="checkbox" name="clear__{{ entry.attr_name }}" value="true">
+          Clear this secret override and fall back to the environment value
+        </label>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+
+  <section class="card settings-actions-card">
+    <div class="button-row">
+      <button type="submit">Save Settings</button>
+      <a class="plain-link" href="/api/settings">Open settings JSON</a>
+    </div>
+  </section>
+</form>
+
+<script>
+(() => {
+  const trigger = document.getElementById("openai-test-trigger");
+  const result = document.getElementById("openai-test-result");
+  if (!trigger || !result) return;
+
+  trigger.addEventListener("click", async () => {
+    trigger.disabled = true;
+    trigger.textContent = "Testing OpenAI...";
+    result.hidden = false;
+    result.className = "alert alert-info";
+    result.textContent = "Running DNS and configuration checks from the app container...";
+    try {
+      const response = await fetch("/api/settings/test-openai", { method: "POST", headers: { "Accept": "application/json" } });
+      const payload = await response.json();
+      const dnsPart = payload.dns ? ` DNS: ${payload.dns.detail || (payload.dns.ok ? "ok" : "failed")}` : "";
+      result.className = response.ok ? "alert alert-success" : "alert alert-error";
+      result.textContent = `${payload.detail || payload.status || "OpenAI diagnostic finished."}${dnsPart}`;
+    } catch (error) {
+      result.className = "alert alert-error";
+      result.textContent = error.message || "OpenAI diagnostic failed.";
+    } finally {
+      trigger.disabled = false;
+      trigger.textContent = "Test OpenAI Connection";
+    }
+  });
+})();
+</script>
+{% endblock %}
+
