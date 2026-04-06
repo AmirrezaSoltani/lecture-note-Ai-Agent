@@ -12,7 +12,8 @@ from urllib import error, request
 from urllib.parse import urlparse
 
 from app.config import settings
-from app.models import LectureNoteBundle, NoteBlock, NoteBlockType, TranscriptSegment
+from app.models import LectureNoteBundle, Marker, MarkerType, NoteBlock, NoteBlockType, ReviewState, TranscriptSegment
+from app.services.ai_assist import normalize_text
 
 logger = logging.getLogger(__name__)
 
@@ -138,8 +139,14 @@ class OpenAINotesPolisher:
         output_path: Path | None = None,
     ) -> tuple[LectureNoteBundle, LLMRuntimeInfo]:
         reference_bundle = polished_bundle or source_bundle
-        fallback_bundle = self._fallback_final_note_bundle(reference_bundle)
         if not self.enabled:
+            transcript_context = {"mode": "disabled", "segment_count": len(source_bundle.segments), "segments": [], "digests": []}
+            prep_bundle = self.build_final_note_prep_bundle(
+                source_bundle,
+                reference_bundle,
+                transcript_context=transcript_context,
+            )
+            fallback_bundle = self._fallback_final_note_bundle(reference_bundle, prep_bundle)
             runtime = LLMRuntimeInfo(
                 enabled=False,
                 applied=False,
@@ -148,7 +155,7 @@ class OpenAINotesPolisher:
                 chunk_count=0,
                 total_ms=0.0,
                 status="disabled",
-                detail="LLM final-note generation disabled or API key missing. Deterministic final note generated.",
+                detail="LLM final-note generation disabled or API key missing. Deterministic final note generated from the local prep bundle.",
             )
             self._persist_runtime(output_path, runtime)
             return fallback_bundle, runtime
@@ -158,10 +165,17 @@ class OpenAINotesPolisher:
         self._fallback_split_count = 0
         try:
             transcript_context = self._build_transcript_context(source_bundle)
-            payload = self._build_final_note_payload(source_bundle, reference_bundle, transcript_context)
+            prep_bundle = self.build_final_note_prep_bundle(
+                source_bundle,
+                reference_bundle,
+                transcript_context=transcript_context,
+            )
+            fallback_bundle = self._fallback_final_note_bundle(reference_bundle, prep_bundle)
+            payload = self._build_final_note_payload(source_bundle, reference_bundle, transcript_context, prep_bundle)
             parsed = self._request_structured_json(
                 developer_message=(
                     "You turn lecture-processing artifacts into a student-facing final handout. "
+                    "Treat the provided pre_llm_bundle as the authoritative locally prepared scaffold. "
                     "Use only the provided transcript-derived evidence, reviewed notes, and markers. "
                     "Correct obvious ASR noise, merge duplicates, and produce a clean Turkish final note."
                 ),
@@ -178,8 +192,8 @@ class OpenAINotesPolisher:
                 note_blocks=note_blocks or fallback_bundle.note_blocks,
             )
             detail_parts = [
-                f"Stage: final-note generation ({transcript_context['mode']}).",
-                "Used reviewed note blocks, marker metadata, and transcript context.",
+                f"Stage: local prep + final-note generation ({transcript_context['mode']}).",
+                "Used reviewed note blocks, exact exam cues/questions, case appendix data, and transcript context.",
             ]
             if self._fallback_split_count:
                 detail_parts.append(
@@ -211,6 +225,41 @@ class OpenAINotesPolisher:
             )
             self._persist_runtime(output_path, runtime)
             return fallback_bundle, runtime
+
+    def build_final_note_prep_bundle(
+        self,
+        source_bundle: LectureNoteBundle,
+        polished_bundle: LectureNoteBundle | None = None,
+        *,
+        transcript_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        reference_bundle = polished_bundle or source_bundle
+        visible_markers = [marker for marker in source_bundle.markers if marker.review_state != ReviewState.REJECTED]
+        transcript_context = transcript_context or self._build_transcript_context(source_bundle)
+        cases_appendix = self._extract_cases_appendix(source_bundle.segments, visible_markers)
+        case_reference_map = self._segment_case_reference_map(cases_appendix)
+        exact_questions = self._extract_exact_questions(source_bundle.segments, visible_markers)
+        exam_highlights = self._extract_exam_highlights(source_bundle.segments, visible_markers)
+        cleaned_sections = self._prepare_cleaned_sections(reference_bundle.note_blocks, case_reference_map)
+        detail_registry = self._build_detail_registry(cleaned_sections, transcript_context)
+        return {
+            "lecture_id": source_bundle.lecture_id,
+            "lecture_title": source_bundle.lecture_title,
+            "local_ready_summary": {
+                "conversation_removed": True,
+                "cases_moved_to_appendix": bool(cases_appendix),
+                "exact_questions_captured": len(exact_questions),
+                "exam_highlights_captured": len(exam_highlights),
+                "section_count": len(cleaned_sections),
+                "transcript_mode": transcript_context.get("mode", "unknown"),
+            },
+            "cleaned_sections": cleaned_sections,
+            "exam_highlights": exam_highlights,
+            "exact_exam_questions": exact_questions,
+            "cases_appendix": cases_appendix,
+            "detail_registry": detail_registry,
+            "case_reference_policy": "Keep case narratives only in Cases Appendix. In the main text, add explicit references such as (Bkz. Vaka 1).",
+        }
 
     def _build_transcript_context(self, bundle: LectureNoteBundle) -> dict[str, Any]:
         rendered_segments = [self._segment_payload(segment) for segment in bundle.segments if segment.text.strip()]
@@ -425,6 +474,7 @@ class OpenAINotesPolisher:
         source_bundle: LectureNoteBundle,
         reference_bundle: LectureNoteBundle,
         transcript_context: dict[str, Any],
+        prep_bundle: dict[str, Any],
     ) -> dict[str, Any]:
         marker_payload = [
             {
@@ -457,8 +507,13 @@ class OpenAINotesPolisher:
                 "goal": "Produce one clean final lecture handout for students.",
                 "output_rules": [
                     "Use only the provided material.",
+                    "Treat pre_llm_bundle as the authoritative locally prepared scaffold.",
                     "Do not include transcript appendix, marker appendix, source references, or system metadata in the student-facing note.",
                     "Merge duplicates and correct obvious ASR artefacts when the intended medical term is clear from context.",
+                    "Remove conversational tone, filler, unrelated anecdotes, and teacher-asides that do not contribute to scientific or exam value.",
+                    "Keep exact exam questions word-for-word whenever possible; only fix obvious spacing or transcription noise without changing meaning.",
+                    "Keep all case narratives only in Cases Appendix and place explicit references in the main text where a case was discussed, using the format (Bkz. Vaka X).",
+                    "Format the handout in the style of a clean exam note: a short introductory note, numbered main headings, optional numbered subheadings, concise bullet points, and inline 'Sınav odağı:' statements under the relevant section.",
                     "Prefer short paragraphs and bullet lists over long walls of text.",
                     "Make exam-relevant takeaways explicit when they are supported by the source.",
                     "Do not create a standalone Keywords section in the final note.",
@@ -466,12 +521,14 @@ class OpenAINotesPolisher:
                 "target_sections": [
                     "Overview",
                     "Core Notes",
-                    "Diagnostic / Classification Points",
-                    "Treatment / Management",
-                    "Cases / Examples",
-                    "Exam Focus",
+                    "Scientific / Exam Details",
+                    "Exact Exam Questions",
+                    "Exam-Important Points",
+                    "Cases Appendix",
+                    "Rapid Review",
                 ],
             },
+            "pre_llm_bundle": prep_bundle,
             "reviewed_note_blocks": note_payload,
             "markers": marker_payload,
             "transcript_context": transcript_context,
@@ -508,78 +565,115 @@ class OpenAINotesPolisher:
             )
         return result or fallback_blocks
 
-    def _fallback_final_note_bundle(self, bundle: LectureNoteBundle) -> LectureNoteBundle:
-        grouped: dict[str, list[NoteBlock]] = {}
-        for block in bundle.note_blocks:
-            if block.content.strip():
-                grouped.setdefault(block.block_type, []).append(block)
 
+    def _fallback_final_note_bundle(self, bundle: LectureNoteBundle, prep_bundle: dict[str, Any]) -> LectureNoteBundle:
         sections: list[NoteBlock] = []
-        overview_lines = self._collect_lines(grouped.get(NoteBlockType.OVERVIEW, []), limit=10)
-        if not overview_lines:
-            overview_lines = self._collect_lines(grouped.get(NoteBlockType.MAIN, []), limit=10)
-        if overview_lines:
-            sections.append(
-                NoteBlock(
-                    block_id="final-overview",
-                    block_type=NoteBlockType.OVERVIEW,
-                    title="Overview",
-                    content=self._render_bullets(overview_lines),
-                )
-            )
+        cleaned_sections = prep_bundle.get("cleaned_sections", [])
+        detail_registry = prep_bundle.get("detail_registry", [])
+        exam_highlights = prep_bundle.get("exam_highlights", [])
+        exact_questions = prep_bundle.get("exact_exam_questions", [])
+        cases_appendix = prep_bundle.get("cases_appendix", [])
 
-        core_lines = self._collect_lines(grouped.get(NoteBlockType.MAIN, []), limit=24)
-        if core_lines:
-            sections.append(
-                NoteBlock(
-                    block_id="final-core-notes",
-                    block_type=NoteBlockType.MAIN,
-                    title="Core Notes",
-                    content=self._render_bullets(core_lines),
-                )
+        intro_lines: list[str] = [
+            "Konuşma dili çıkarılmış, sınav odaklı ve düzenlenmiş özet.",
+            "Ana metinde ilgili klinik senaryolar için '(Bkz. Vaka X)' referansı kullanılmıştır.",
+            "Yalnızca bilimsel ve sınav açısından gerekli bilgi korunmuştur.",
+        ]
+        sections.append(
+            NoteBlock(
+                block_id="final-intro",
+                block_type=NoteBlockType.OVERVIEW,
+                title="Ders notu özeti",
+                content="\n".join(intro_lines),
             )
-
-        exam_lines = self._collect_lines(
-            [
-                *grouped.get(NoteBlockType.EXAM, []),
-                *grouped.get(NoteBlockType.IMPORTANT, []),
-                *grouped.get(NoteBlockType.QUESTION, []),
-            ],
-            limit=18,
         )
-        if exam_lines:
+
+        numbered_index = 1
+        for section in cleaned_sections:
+            key_points = [str(item).strip() for item in section.get("key_points", []) if str(item).strip()]
+            if not key_points:
+                continue
+            title = str(section.get("title", "Konu Başlığı")).strip() or "Konu Başlığı"
             sections.append(
                 NoteBlock(
-                    block_id="final-exam-focus",
+                    block_id=f"final-section-{numbered_index}",
+                    block_type=NoteBlockType.MAIN if section.get("block_type") != NoteBlockType.EXAM else NoteBlockType.EXAM,
+                    title=f"{numbered_index}. {title}",
+                    content=self._render_bullets(key_points[:12]),
+                    source_segment_indexes=list(section.get("source_segment_indexes", [])),
+                )
+            )
+            numbered_index += 1
+
+        detail_lines: list[str] = []
+        for bucket in detail_registry:
+            bucket_label = str(bucket.get("bucket", "Ayrıntılar")).replace("_", " ").title()
+            for item in bucket.get("items", [])[:4]:
+                detail_lines.append(f"{bucket_label}: {item}")
+        if detail_lines:
+            sections.append(
+                NoteBlock(
+                    block_id="final-scientific-details",
+                    block_type=NoteBlockType.IMPORTANT,
+                    title=f"{numbered_index}. Bilimsel ve sınav ayrıntıları",
+                    content=self._render_bullets(detail_lines[:12]),
+                )
+            )
+            numbered_index += 1
+
+        if exam_highlights:
+            sections.append(
+                NoteBlock(
+                    block_id="final-exam-important",
                     block_type=NoteBlockType.EXAM,
-                    title="Exam Focus",
-                    content=self._render_bullets(exam_lines),
+                    title=f"{numbered_index}. Sınav odağı",
+                    content="\n".join(
+                        f"Sınav odağı: {item.get('cleaned_quote', item.get('exact_quote', ''))}"
+                        for item in exam_highlights[:8]
+                        if str(item.get("cleaned_quote", item.get("exact_quote", ""))).strip()
+                    ),
                 )
             )
+            numbered_index += 1
 
-        example_lines = self._collect_lines(
-            [*grouped.get(NoteBlockType.CASE, []), *grouped.get(NoteBlockType.EXAMPLE, [])],
-            limit=12,
-        )
-        if example_lines:
+        if exact_questions:
             sections.append(
                 NoteBlock(
-                    block_id="final-cases-examples",
-                    block_type=NoteBlockType.CASE,
-                    title="Cases and Examples",
-                    content=self._render_bullets(example_lines),
+                    block_id="final-exact-questions",
+                    block_type=NoteBlockType.QUESTION,
+                    title=f"{numbered_index}. Tam soru kalıpları",
+                    content="\n".join(
+                        f"- {item['exact_text']}" for item in exact_questions if str(item.get("exact_text", "")).strip()
+                    ),
+                )
+            )
+            numbered_index += 1
+
+        rapid_review_lines: list[str] = []
+        for section in cleaned_sections[:8]:
+            for point in section.get("key_points", [])[:2]:
+                rapid_review_lines.append(point)
+        if rapid_review_lines:
+            sections.append(
+                NoteBlock(
+                    block_id="final-rapid-review",
+                    block_type=NoteBlockType.IMPORTANT,
+                    title=f"{numbered_index}. Hızlı tekrar listesi",
+                    content=self._render_bullets(self._unique_strings(rapid_review_lines)[:10]),
                 )
             )
 
-        if not sections:
-            sections = [
+        if cases_appendix:
+            sections.append(
                 NoteBlock(
-                    block_id="final-note",
-                    block_type=NoteBlockType.MAIN,
-                    title="Final Note",
-                    content=self._render_bullets(self._collect_lines(bundle.note_blocks, limit=24) or [bundle.lecture_title]),
+                    block_id="final-cases-appendix",
+                    block_type=NoteBlockType.CASE,
+                    title="Cases Appendix",
+                    content="\n".join(
+                        f"{item['case_id']}. {item['clean_summary']}" for item in cases_appendix if str(item.get("clean_summary", "")).strip()
+                    ),
                 )
-            ]
+            )
 
         return LectureNoteBundle(
             lecture_id=bundle.lecture_id,
@@ -589,6 +683,293 @@ class OpenAINotesPolisher:
             markers=bundle.markers,
             note_blocks=sections,
         )
+    def _extract_exam_highlights(self, segments: list[TranscriptSegment], markers: list[Marker]) -> list[dict[str, Any]]:
+        exam_types = {MarkerType.EXAM_HIGH, MarkerType.IMPORTANT_STAR, MarkerType.MEMORIZE_EXACT}
+        highlights: list[dict[str, Any]] = []
+        for marker in markers:
+            if marker.marker_type not in exam_types:
+                continue
+            segment = segments[marker.source_segment_index] if 0 <= marker.source_segment_index < len(segments) else None
+            exact_quote = (segment.text if segment else marker.text).strip()
+            cleaned_quote = self._clean_sentence(self._assistant_like_cleanup(exact_quote))
+            if not exact_quote:
+                continue
+            highlights.append(
+                {
+                    "marker_type": marker.marker_type,
+                    "label": marker.label,
+                    "matched_phrase": marker.matched_phrase,
+                    "score": marker.score,
+                    "source_segment_indexes": [marker.source_segment_index],
+                    "exact_quote": exact_quote,
+                    "cleaned_quote": cleaned_quote,
+                }
+            )
+        seen: set[tuple[str, tuple[int, ...], str]] = set()
+        deduped: list[dict[str, Any]] = []
+        for item in sorted(highlights, key=lambda current: (current["source_segment_indexes"][0], -current["score"])):
+            key = (
+                item["marker_type"],
+                tuple(item["source_segment_indexes"]),
+                item["exact_quote"].casefold(),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        return deduped
+
+    def _extract_exact_questions(self, segments: list[TranscriptSegment], markers: list[Marker]) -> list[dict[str, Any]]:
+        seed_indexes: set[int] = set()
+        marker_support: dict[int, list[str]] = {}
+        for marker in markers:
+            if marker.marker_type == MarkerType.QUESTION or (
+                marker.marker_type == MarkerType.EXAM_HIGH and "soru" in marker.matched_phrase.casefold()
+            ):
+                seed_indexes.add(marker.source_segment_index)
+                marker_support.setdefault(marker.source_segment_index, []).append(marker.marker_type)
+        for segment in segments:
+            if self._is_substantive_question(segment.text):
+                seed_indexes.add(segment.index)
+        if not seed_indexes:
+            return []
+        clusters = self._merge_seed_indexes(sorted(seed_indexes), max_gap=2)
+        questions: list[dict[str, Any]] = []
+        for question_number, cluster in enumerate(clusters, start=1):
+            expanded = self._expand_question_cluster(cluster, segments)
+            exact_text = " ".join(segments[index].text.strip() for index in expanded if 0 <= index < len(segments)).strip()
+            exact_text = re.sub(r"\s+", " ", exact_text)
+            if not self._is_substantive_question(exact_text):
+                continue
+            cleaned_prompt = self._clean_sentence(self._assistant_like_cleanup(exact_text))
+            questions.append(
+                {
+                    "question_id": f"Soru {question_number}",
+                    "exact_text": exact_text,
+                    "cleaned_prompt": cleaned_prompt,
+                    "source_segment_indexes": expanded,
+                    "marker_types": sorted({support for index in expanded for support in marker_support.get(index, [])}),
+                }
+            )
+        return questions
+
+    def _extract_cases_appendix(self, segments: list[TranscriptSegment], markers: list[Marker]) -> list[dict[str, Any]]:
+        seed_indexes: set[int] = set()
+        for marker in markers:
+            if marker.marker_type == MarkerType.CASE:
+                seed_indexes.add(marker.source_segment_index)
+        for segment in segments:
+            if self._is_case_seed(segment.text):
+                seed_indexes.add(segment.index)
+        if not seed_indexes:
+            return []
+        clusters = self._merge_seed_indexes(sorted(seed_indexes), max_gap=3)
+        cases: list[dict[str, Any]] = []
+        for case_number, cluster in enumerate(clusters, start=1):
+            expanded = self._expand_case_cluster(cluster, segments)
+            exact_excerpt = " ".join(segments[index].text.strip() for index in expanded if 0 <= index < len(segments)).strip()
+            exact_excerpt = re.sub(r"\s+", " ", exact_excerpt)
+            clean_parts = [self._assistant_like_cleanup(segments[index].text) for index in expanded]
+            clean_summary = self._clean_sentence(" ".join(part for part in clean_parts if part))
+            if not exact_excerpt or not clean_summary:
+                continue
+            cases.append(
+                {
+                    "case_id": f"Vaka {case_number}",
+                    "title": f"Vaka {case_number}",
+                    "exact_excerpt": exact_excerpt,
+                    "clean_summary": clean_summary,
+                    "source_segment_indexes": expanded,
+                }
+            )
+        return cases
+
+    def _segment_case_reference_map(self, cases_appendix: list[dict[str, Any]]) -> dict[int, list[str]]:
+        mapping: dict[int, list[str]] = {}
+        for case in cases_appendix:
+            for segment_index in case.get("source_segment_indexes", []):
+                mapping.setdefault(int(segment_index), []).append(str(case.get("case_id", "Vaka")))
+        return mapping
+
+    def _prepare_cleaned_sections(
+        self,
+        note_blocks: list[NoteBlock],
+        case_reference_map: dict[int, list[str]],
+    ) -> list[dict[str, Any]]:
+        cleaned_sections: list[dict[str, Any]] = []
+        for block in note_blocks:
+            if not block.content.strip():
+                continue
+            if block.block_type in {NoteBlockType.KEYWORD, NoteBlockType.CASE, NoteBlockType.EXAMPLE, NoteBlockType.QUESTION}:
+                continue
+            key_points: list[str] = []
+            for raw_line in block.content.splitlines():
+                cleaned = self._prepare_line_for_main_text(raw_line)
+                if not cleaned:
+                    continue
+                key_points.append(cleaned)
+            key_points = self._unique_strings(key_points)
+            case_refs = sorted({ref for index in block.source_segment_indexes for ref in case_reference_map.get(index, [])})
+            if case_refs:
+                key_points.append(f"İlgili klinik senaryo: {', '.join(case_refs)} (Bkz. Cases Appendix).")
+            if not key_points:
+                continue
+            cleaned_sections.append(
+                {
+                    "block_id": block.block_id,
+                    "block_type": block.block_type,
+                    "title": block.title,
+                    "key_points": key_points,
+                    "case_references": case_refs,
+                    "source_segment_indexes": block.source_segment_indexes,
+                }
+            )
+        return cleaned_sections
+
+    def _build_detail_registry(
+        self,
+        cleaned_sections: list[dict[str, Any]],
+        transcript_context: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        buckets: dict[str, list[str]] = {
+            "definitions": [],
+            "classification": [],
+            "diagnosis": [],
+            "treatment": [],
+            "thresholds_or_numbers": [],
+            "exam_priority": [],
+        }
+        for section in cleaned_sections:
+            for line in section.get("key_points", []):
+                bucket = self._detail_bucket_for_line(line)
+                buckets.setdefault(bucket, []).append(line)
+        for digest in transcript_context.get("digests", []):
+            for item in digest.get("high_yield_facts", []):
+                bucket = self._detail_bucket_for_line(item)
+                buckets.setdefault(bucket, []).append(self._clean_sentence(item))
+            for item in digest.get("exam_cues", []):
+                buckets.setdefault("exam_priority", []).append(self._clean_sentence(item))
+        detail_registry: list[dict[str, Any]] = []
+        for bucket, values in buckets.items():
+            unique_values = self._unique_strings(values)
+            if unique_values:
+                detail_registry.append({"bucket": bucket, "items": unique_values[:10]})
+        return detail_registry
+
+    def _prepare_line_for_main_text(self, raw_line: str) -> str:
+        cleaned = re.sub(r"\s+", " ", raw_line.strip())
+        cleaned = cleaned.lstrip("-•* ")
+        if not cleaned or self._is_low_value_text(cleaned):
+            return ""
+        cleaned = self._assistant_like_cleanup(cleaned)
+        if not cleaned or self._is_low_value_text(cleaned):
+            return ""
+        if re.match(r"^\d+[\.)]\s+", cleaned):
+            return cleaned
+        return self._clean_sentence(cleaned)
+
+    def _assistant_like_cleanup(self, value: str) -> str:
+        cleaned = re.sub(r"\s+", " ", str(value or "").strip())
+        cleaned = cleaned.replace("..", ".")
+        cleaned = re.sub(r"\b(tamam mı|geçtik|evet|arkadaşlar|şimdi)\b", " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,;:-")
+        return cleaned
+
+    def _is_low_value_text(self, value: str) -> bool:
+        normalized = normalize_text(value)
+        if not normalized:
+            return True
+        exact_low_value = {
+            "tamam mı",
+            "geçtik",
+            "evet",
+            "tamam",
+            "aynen",
+            "çok yaşa",
+        }
+        if normalized in exact_low_value:
+            return True
+        if len(normalized.split()) <= 2 and normalized.endswith("?"):
+            return True
+        if re.search(r"\b(geliyor mu başınıza|bizim de zamanımıza geldi|neyse)\b", normalized):
+            return True
+        return False
+
+    def _detail_bucket_for_line(self, value: str) -> str:
+        normalized = normalize_text(value)
+        if re.search(r"\b(tedavi|yönetim|yaklaşım|ilk basamak|izlem)\b", normalized):
+            return "treatment"
+        if re.search(r"\b(tanı|tanım|tanısı|düşündür|ayırt|bulgu|semptom|belirti)\b", normalized):
+            return "diagnosis"
+        if re.search(r"\b(sınıflan|tip|evre|kriter|rom|grup)\b", normalized):
+            return "classification"
+        if re.search(r"\b(önemli|sınav|sorul|çıkar|ezberle|yıldız)\b", normalized):
+            return "exam_priority"
+        if re.search(r"\d", normalized):
+            return "thresholds_or_numbers"
+        return "definitions"
+
+    @staticmethod
+    def _merge_seed_indexes(indexes: list[int], *, max_gap: int) -> list[list[int]]:
+        if not indexes:
+            return []
+        clusters: list[list[int]] = [[indexes[0]]]
+        for index in indexes[1:]:
+            if index - clusters[-1][-1] <= max_gap:
+                clusters[-1].append(index)
+            else:
+                clusters.append([index])
+        return clusters
+
+    def _expand_question_cluster(self, cluster: list[int], segments: list[TranscriptSegment]) -> list[int]:
+        start = max(0, cluster[0] - 1)
+        end = min(len(segments) - 1, cluster[-1] + 1)
+        indexes: list[int] = []
+        for index in range(start, end + 1):
+            text = segments[index].text.strip()
+            if index in cluster or self._is_substantive_question(text) or self._looks_like_question_frame(text):
+                indexes.append(index)
+        return indexes or cluster
+
+    def _expand_case_cluster(self, cluster: list[int], segments: list[TranscriptSegment]) -> list[int]:
+        start = max(0, cluster[0] - 1)
+        end = min(len(segments) - 1, cluster[-1] + 2)
+        indexes: list[int] = []
+        for index in range(start, end + 1):
+            text = segments[index].text.strip()
+            if not text or self._is_low_value_text(text):
+                continue
+            if index in cluster or self._is_case_seed(text) or self._looks_like_case_context(text):
+                indexes.append(index)
+        return indexes or cluster
+
+    def _is_substantive_question(self, value: str) -> bool:
+        normalized = normalize_text(value)
+        if len(normalized) < 12:
+            return False
+        return bool(
+            re.search(
+                r"\?|\b(aşağıdakilerden|hangi|hangisi|neden|nasıl|kaç|tanınız|tanı|yanlıştır|doğrudur|olası|düşünürsünüz|sınıflandır)\b",
+                normalized,
+                flags=re.IGNORECASE,
+            )
+        )
+
+    def _looks_like_question_frame(self, value: str) -> bool:
+        normalized = normalize_text(value)
+        return bool(re.search(r"\b(soru bu|size şöyle|şıklar|dedi)\b", normalized, flags=re.IGNORECASE))
+
+    def _is_case_seed(self, value: str) -> bool:
+        normalized = normalize_text(value)
+        return bool(
+            re.search(r"\b(vaka|olgu|klinik senaryo)\b", normalized)
+            or re.search(r"\bhasta\b", normalized)
+            and re.search(r"\b(geldi|başvur|getir|öykü|erkek|kadın|çocuk)\b", normalized)
+        )
+
+    def _looks_like_case_context(self, value: str) -> bool:
+        normalized = normalize_text(value)
+        return bool(re.search(r"\b(öykü|muayene|tanı|takip|yatırdık|tedavi|belirti|bulgu)\b", normalized))
 
     def _request_structured_json(
         self,

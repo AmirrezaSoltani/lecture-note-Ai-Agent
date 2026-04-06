@@ -24,6 +24,7 @@ class ArtifactStorage:
             "notes_html": self.working_dir / "notes.html",
             "notes_pdf": self.working_dir / "notes.pdf",
             "notes_docx": self.working_dir / "notes.docx",
+            "final_note_prep_json": self.working_dir / "final_note_prep.json",
             "final_note_json": self.working_dir / "final_note.json",
             "final_note_md": self.working_dir / "final_note.md",
             "final_note_html": self.working_dir / "final_note.html",

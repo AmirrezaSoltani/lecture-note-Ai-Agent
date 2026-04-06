@@ -212,103 +212,192 @@ class HtmlExporter:
         return html.escape(value, quote=True)
 
 
+
 class FinalNoteHtmlExporter:
+    INTRO_LINES = [
+        "Konuşma dili çıkarılmış, sınav odaklı ve düzenlenmiş özet.",
+        "Ana metinde ilgili klinik senaryolar için \"(Bkz. Vaka X)\" referansı kullanılmıştır.",
+        "Yalnızca bilimsel ve sınav açısından gerekli bilgi korunmuştur.",
+    ]
+
     def render(self, bundle: LectureNoteBundle) -> str:
-        section_html = []
-        class_map = {
-            "overview": "section-overview",
-            "main": "section-main",
-            "exam": "section-exam",
-            "important": "section-important",
-            "question": "section-question",
-            "case": "section-case",
-            "example": "section-example",
-            "keyword": "section-keyword",
-        }
         filtered_blocks = [
             block
             for block in bundle.note_blocks
             if not (block.block_type == "keyword" or block.title.strip().casefold() in {"keyword", "keywords"})
         ]
-        for block in filtered_blocks:
-            css_class = class_map.get(block.block_type, "section-main")
-            body_lines = []
-            for line in block.content.splitlines():
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                if stripped.startswith(("- ", "• ")):
-                    body_lines.append(f"<li>{self._escape_html(stripped[2:].strip())}</li>")
-                else:
-                    body_lines.append(f"<p>{self._escape_html(stripped)}</p>")
-            if any(item.startswith("<li>") for item in body_lines):
-                rendered_body = "<ul>" + "".join(item if item.startswith("<li>") else f"<li>{item}</li>" for item in body_lines) + "</ul>"
-            else:
-                rendered_body = "".join(body_lines)
-            section_html.append(
-                f'''<section class="final-section {css_class}">
-                    <div class="section-chip">{self._escape_html(block.block_type.replace('_', ' ').title())}</div>
-                    <h2>{self._escape_html(block.title)}</h2>
-                    <div class="section-body">{rendered_body}</div>
-                </section>'''
-            )
 
-        stats = [
-            ("Sections", len(filtered_blocks)),
-            ("Markers used", len(bundle.markers)),
-            ("Transcript segments", len(bundle.segments)),
-        ]
-        stat_cards = "".join(
-            f'<div class="stat-card"><div class="stat-value">{value}</div><div class="stat-label">{label}</div></div>'
-            for label, value in stats
-        )
+        main_blocks = []
+        appendix_blocks = []
+        visible_index = 0
+        for block in filtered_blocks:
+            if self._is_intro_block(block):
+                continue
+            if self._is_cases_appendix(block):
+                appendix_blocks.append(block)
+                continue
+            visible_index += 1
+            main_blocks.append((block, self._display_title(block.title, visible_index)))
+
+        main_html = "".join(self._render_section(block, title) for block, title in main_blocks)
+        appendix_html = "".join(self._render_appendix(block) for block in appendix_blocks)
+        intro_html = "".join(f"<p>{self._escape_html(line)}</p>" for line in self.INTRO_LINES)
 
         return f"""<!DOCTYPE html>
-<html lang=\"en\">
+<html lang="tr">
 <head>
-  <meta charset=\"UTF-8\">
-  <title>{self._escape_html(bundle.lecture_title)} — Final Note</title>
+  <meta charset="UTF-8">
+  <title>{self._escape_html(bundle.lecture_title)} - Final Note</title>
   <style>
-    @page {{ size: A4; margin: 16mm; }}
-    body {{ font-family: Arial, sans-serif; margin: 0; color: #0f172a; background: #eef2ff; }}
-    main {{ padding: 22px; }}
-    .hero {{ background: linear-gradient(135deg, #0f172a 0%, #1d4ed8 55%, #60a5fa 100%); color: white; border-radius: 28px; padding: 28px 30px; box-shadow: 0 20px 40px rgba(15, 23, 42, 0.12); margin-bottom: 18px; }}
-    .hero-kicker {{ font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: #dbeafe; margin-bottom: 12px; }}
-    .hero h1 {{ margin: 0; font-size: 30px; line-height: 1.2; }}
-    .hero p {{ margin: 10px 0 0 0; color: #dbeafe; line-height: 1.5; }}
-    .stats {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 18px; }}
-    .stat-card {{ background: rgba(255,255,255,0.94); border: 1px solid #dbeafe; border-radius: 18px; padding: 14px 16px; }}
-    .stat-value {{ font-size: 24px; font-weight: 700; color: #1d4ed8; }}
-    .stat-label {{ color: #475569; font-size: 12px; margin-top: 4px; }}
-    .final-section {{ background: white; border-radius: 22px; padding: 18px 20px; margin: 0 0 14px 0; border: 1px solid #e2e8f0; page-break-inside: avoid; box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05); }}
-    .final-section h2 {{ margin: 8px 0 10px 0; font-size: 21px; }}
-    .section-chip {{ display: inline-block; border-radius: 999px; padding: 5px 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; background: #e0e7ff; color: #3730a3; }}
-    .section-body p {{ margin: 0 0 8px 0; line-height: 1.58; }}
-    .section-body ul {{ margin: 8px 0 0 0; padding-left: 20px; }}
-    .section-body li {{ margin: 0 0 7px 0; line-height: 1.5; }}
-    .section-overview {{ border-left: 10px solid #4f46e5; background: #eef2ff; }}
-    .section-main {{ border-left: 10px solid #0f172a; }}
-    .section-exam {{ border-left: 10px solid #111827; background: #f8fafc; }}
-    .section-important {{ border-left: 10px solid #2563eb; background: #eff6ff; }}
-    .section-question {{ border-left: 10px solid #dc2626; background: #fef2f2; }}
-    .section-case {{ border-left: 10px solid #059669; background: #ecfdf5; }}
-    .section-example {{ border-left: 10px solid #ea580c; background: #fff7ed; }}
-    .section-keyword {{ border-left: 10px solid #7c3aed; background: #f5f3ff; }}
+    @page {{ size: A4; margin: 16mm 15mm 16mm 15mm; }}
+    body {{ font-family: Arial, sans-serif; margin: 0; color: #111111; background: #ffffff; }}
+    main {{ padding: 0; }}
+    .title-block {{ margin-bottom: 12px; }}
+    .title-block h1 {{ margin: 0 0 6px 0; font-size: 23px; font-weight: 700; line-height: 1.2; }}
+    .title-block p {{ margin: 0 0 4px 0; font-size: 11.5px; line-height: 1.45; }}
+    .columns {{ column-count: 2; column-gap: 14mm; column-fill: balance; }}
+    .note-section {{ break-inside: avoid; page-break-inside: avoid; margin: 0 0 11px 0; }}
+    .note-section h2 {{ margin: 0 0 5px 0; font-size: 13.8px; line-height: 1.25; font-weight: 700; }}
+    .note-section h3 {{ margin: 6px 0 4px 0; font-size: 12.2px; line-height: 1.25; font-weight: 700; }}
+    .note-section p {{ margin: 0 0 4px 0; font-size: 11px; line-height: 1.42; }}
+    .note-section ul {{ margin: 0; padding-left: 13px; }}
+    .note-section li {{ margin: 0 0 3px 0; font-size: 11px; line-height: 1.42; }}
+    .exam-focus {{ margin-top: 5px; font-size: 11px; line-height: 1.42; }}
+    .exam-focus strong {{ font-weight: 700; }}
+    .appendix-page {{ page-break-before: always; }}
+    .appendix-page h2 {{ margin: 0 0 6px 0; font-size: 14px; font-weight: 700; }}
+    .appendix-intro {{ margin: 0 0 10px 0; font-size: 11px; line-height: 1.42; }}
+    .case-entry {{ margin: 0 0 10px 0; }}
+    .case-entry h3 {{ margin: 0 0 4px 0; font-size: 12.2px; font-weight: 700; }}
+    .case-entry p {{ margin: 0 0 3px 0; font-size: 11px; line-height: 1.42; }}
+    .case-entry ul {{ margin: 0; padding-left: 13px; }}
+    .case-entry li {{ margin: 0 0 3px 0; font-size: 11px; line-height: 1.42; }}
   </style>
 </head>
 <body>
   <main>
-    <section class=\"hero\">
-      <div class=\"hero-kicker\">Final Note</div>
+    <section class="title-block">
       <h1>{self._escape_html(bundle.lecture_title)}</h1>
-      <p>Clean student-facing handout generated from the reviewed lecture bundle, transcript evidence, and marker cues.</p>
-      <p>Lecture ID: {self._escape_html(bundle.lecture_id)} · Generated at: {self._escape_html(bundle.created_at)}</p>
+      {intro_html}
     </section>
-    <section class=\"stats\">{stat_cards}</section>
-    {''.join(section_html)}
+    <section class="columns">{main_html}</section>
+    {appendix_html}
   </main>
 </body>
 </html>"""
+
+    def _render_section(self, block, title: str) -> str:
+        body = self._render_lines(block.content.splitlines())
+        return f'<section class="note-section"><h2>{self._escape_html(title)}</h2>{body}</section>'
+
+    def _render_appendix(self, block) -> str:
+        entries = []
+        current_title = None
+        current_lines = []
+        for raw_line in block.content.splitlines():
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            normalized = stripped.lstrip('-• ').strip()
+            if normalized.lower().startswith('vaka '):
+                if current_title:
+                    entries.append(self._render_case_entry(current_title, current_lines))
+                parts = normalized.split('. ', 1)
+                current_title = parts[0] if parts else normalized
+                current_lines = [parts[1]] if len(parts) > 1 and parts[1].strip() else []
+            else:
+                current_lines.append(normalized)
+        if current_title:
+            entries.append(self._render_case_entry(current_title, current_lines))
+        if not entries:
+            fallback_lines = [line.strip() for line in block.content.splitlines() if line.strip()]
+            entries.append(self._render_case_entry('Vaka özeti', fallback_lines))
+        return (
+            '<section class="appendix-page"><h2>Cases Appendix</h2>'
+            '<p class="appendix-intro">Ana metinde referans verilen klinik senaryoların kısa ve temizlenmiş özeti:</p>'
+            + ''.join(entries)
+            + '</section>'
+        )
+
+    def _render_case_entry(self, case_title: str, lines: list[str]) -> str:
+        bullets = []
+        paragraphs = []
+        for line in lines:
+            normalized = line.strip()
+            if not normalized:
+                continue
+            if normalized.startswith('Sınav odağı:'):
+                focus_text = normalized.split(':', 1)[1].strip() if ':' in normalized else normalized
+                paragraphs.append(f'<p class="exam-focus"><strong>Sınav odağı:</strong> {self._escape_html(focus_text)}</p>')
+            else:
+                bullets.append(f'<li>{self._escape_html(normalized)}</li>')
+        body = ''.join(paragraphs) + (f'<ul>{"".join(bullets)}</ul>' if bullets else '')
+        return f'<div class="case-entry"><h3>{self._escape_html(case_title)}</h3>{body}</div>'
+
+    def _render_lines(self, lines: list[str]) -> str:
+        parts = []
+        bullets = []
+
+        def flush_bullets() -> None:
+            nonlocal bullets
+            if bullets:
+                parts.append(f'<ul>{"".join(bullets)}</ul>')
+                bullets = []
+
+        for raw_line in lines:
+            stripped = raw_line.strip()
+            if not stripped:
+                flush_bullets()
+                continue
+            if stripped.startswith(('Sınav odağı:', 'Sınav odağı -', 'Sınav Odağı:')):
+                flush_bullets()
+                _, _, rest = stripped.partition(':')
+                focus_text = rest.strip() or stripped.replace('Sınav odağı', '').strip(' :-')
+                parts.append(f'<p class="exam-focus"><strong>Sınav odağı:</strong> {self._escape_html(focus_text)}</p>')
+                continue
+            if stripped.startswith(('- ', '• ')):
+                bullets.append(f'<li>{self._escape_html(stripped[2:].strip())}</li>')
+                continue
+            if self._looks_like_subheading(stripped):
+                flush_bullets()
+                parts.append(f'<h3>{self._escape_html(stripped)}</h3>')
+                continue
+            flush_bullets()
+            parts.append(f'<p>{self._escape_html(stripped)}</p>')
+        flush_bullets()
+        return ''.join(parts)
+
+    @staticmethod
+    def _looks_like_subheading(text: str) -> bool:
+        import re
+        return bool(re.match(r'^\d+(?:\.\d+)+\s+', text))
+
+    @staticmethod
+    def _is_cases_appendix(block) -> bool:
+        normalized = block.title.strip().casefold()
+        return block.block_type == 'case' or normalized in {'cases appendix', 'case appendix', 'vaka eki', 'vakalar'}
+
+    @staticmethod
+    def _is_intro_block(block) -> bool:
+        normalized = block.title.strip().casefold()
+        return block.block_type == 'overview' and normalized in {'ders notu özeti', 'overview', 'giriş', 'kısa giriş'}
+
+    @staticmethod
+    def _display_title(title: str, visible_index: int) -> str:
+        import re
+        normalized = title.strip()
+        if re.match(r'^\d+(?:\.\d+)*\.?\s+', normalized):
+            return normalized
+        title_map = {
+            'overview': 'Genel çerçeve',
+            'core notes': 'Ana notlar',
+            'scientific / exam details': 'Bilimsel ve sınav ayrıntıları',
+            'exact exam questions': 'Tam soru kalıpları',
+            'exam-important points': 'Sınav odağı',
+            'rapid review': 'Hızlı tekrar listesi',
+        }
+        display = title_map.get(normalized.casefold(), normalized)
+        return f'{visible_index}. {display}'
 
     @staticmethod
     def _escape_html(value: str) -> str:

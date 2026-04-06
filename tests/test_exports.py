@@ -54,7 +54,7 @@ def test_pdf_and_docx_exporters_create_files(tmp_path: Path) -> None:
 def test_final_note_html_exporter_omits_internal_appendices() -> None:
     bundle = _bundle()
     html_content = FinalNoteHtmlExporter().render(bundle)
-    assert "Final Note" in html_content
+    assert "Konuşma dili çıkarılmış" in html_content
     assert "Marker Review Appendix" not in html_content
     assert "Transcript Appendix" not in html_content
 
@@ -83,6 +83,6 @@ def test_final_note_html_exporter_skips_keyword_sections() -> None:
         ],
     )
     html_content = FinalNoteHtmlExporter().render(bundle)
-    assert "Core Notes" in html_content
+    assert "Ana notlar" in html_content
     assert "Keywords" not in html_content
-    assert ">1<" in html_content
+    assert "column-count: 2" in html_content

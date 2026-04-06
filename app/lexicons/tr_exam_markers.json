@@ -11,7 +11,13 @@
       "soru\\s+havuzunda\\s+var",
       "sınavda\\s+soruldu",
       "sorulmamış\\s+ama\\s+sorulabilir",
-      "\\b\\d+\\s*(x|kez|sefer)\\s+soruldu"
+      "\\b\\d+\\s*(x|kez|sefer)\\s+soruldu",
+      "sınavda\\s+çıkar",
+      "kesin\\s+çıkar",
+      "bunu\\s+bilin",
+      "özellikle\\s+sorulur",
+      "soru\\s+bu",
+      "aynen\\s+sorulur"
     ]
   },
   "important_star": {
@@ -24,7 +30,10 @@
       "burayı\\s+bileceksiniz",
       "önemli",
       "altını\\s+çizin",
-      "çok\\s+önemli"
+      "çok\\s+önemli",
+      "mutlaka\\s+bilin",
+      "burası\\s+önemli",
+      "altını\\s+çizelim"
     ]
   },
   "memorize_exact": {
@@ -56,7 +65,12 @@
       "\\bsoru\\b",
       "şöyle\\s+sorar",
       "sınav\\s+sorusu",
-      "bunu\\s+sorabilir"
+      "bunu\\s+sorabilir",
+      "aşağıdakilerden\\s+hangisi",
+      "en\\s+olası\\s+tanınız",
+      "tanınız\\s+nedir",
+      "hangisi\\s+yanlıştır",
+      "hangisi\\s+doğrudur"
     ]
   },
   "case": {
@@ -67,7 +81,10 @@
       "\\bvaka\\b",
       "\\bolgu\\b",
       "hasta\\s+geliyor",
-      "klinik\\s+senaryo"
+      "klinik\\s+senaryo",
+      "hasta\\s+şöyle",
+      "bir\\s+çocuk\\s+geldi",
+      "bir\\s+hasta\\s+geldi"
     ]
   },
   "example": {

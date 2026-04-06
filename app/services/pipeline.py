@@ -89,6 +89,8 @@ class LectureProcessingPipeline:
 
         notes_polisher = self._resolve_notes_polisher()
         polished_bundle, polish_runtime = notes_polisher.polish_bundle(reviewed_bundle)
+        prep_bundle = notes_polisher.build_final_note_prep_bundle(reviewed_bundle, polished_bundle)
+        artifact_paths["final_note_prep_json"].write_text(json.dumps(prep_bundle, ensure_ascii=False, indent=2), encoding="utf-8")
         final_note_bundle, final_note_runtime = notes_polisher.generate_final_note(reviewed_bundle, polished_bundle)
         llm_runtime = merge_llm_runtimes(polish_runtime, final_note_runtime)
         artifact_paths["llm_runtime"].write_text(json.dumps(llm_runtime.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
@@ -137,6 +139,8 @@ class LectureProcessingPipeline:
     ) -> list[ArtifactRecord]:
         notes_polisher = self._resolve_notes_polisher(force_enabled=force_llm)
         polished_bundle, polish_runtime = notes_polisher.polish_bundle(bundle)
+        prep_bundle = notes_polisher.build_final_note_prep_bundle(bundle, polished_bundle)
+        artifact_paths["final_note_prep_json"].write_text(json.dumps(prep_bundle, ensure_ascii=False, indent=2), encoding="utf-8")
         final_note_bundle, final_note_runtime = notes_polisher.generate_final_note(bundle, polished_bundle)
         combined_runtime = merge_llm_runtimes(polish_runtime, final_note_runtime)
         artifact_paths["llm_runtime"].write_text(json.dumps(combined_runtime.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
