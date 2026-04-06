@@ -25,6 +25,9 @@
       <button type="submit" class="secondary-button">Recompose Notes From Reviews</button>
     </form>
     {% endif %}
+    {% if artifact_lookup.get('final_note_pdf') %}
+    <a class="button-link" href="/lectures/{{ lecture.lecture_id }}/download/final-note-pdf">Download Final Note PDF</a>
+    {% endif %}
   </div>
 
   {% if lecture.error_message %}
@@ -54,6 +57,11 @@
     {% endif %}
     {% if lecture.notes_pdf_path %}<a href="/lectures/{{ lecture.lecture_id }}/download/notes-pdf">Notes PDF</a>{% endif %}
     {% if lecture.notes_docx_path %}<a href="/lectures/{{ lecture.lecture_id }}/download/notes-docx">Notes DOCX</a>{% endif %}
+    {% if artifact_lookup.get('final_note_prep_json') %}<a href="/lectures/{{ lecture.lecture_id }}/download/final_note_prep_json">Final Note Prep JSON</a>{% endif %}
+    {% if artifact_lookup.get('final_note_json') %}<a href="/lectures/{{ lecture.lecture_id }}/download/final_note_json">Final Note JSON</a>{% endif %}
+    {% if artifact_lookup.get('final_note_md') %}<a href="/lectures/{{ lecture.lecture_id }}/download/final_note_md">Final Note Markdown</a>{% endif %}
+    {% if artifact_lookup.get('final_note_html') %}<a href="/lectures/{{ lecture.lecture_id }}/download/final_note_html">Final Note HTML</a>{% endif %}
+    {% if artifact_lookup.get('final_note_pdf') %}<a href="/lectures/{{ lecture.lecture_id }}/download/final-note-pdf">Final Note PDF</a>{% endif %}
   </div>
 </section>
 
@@ -141,6 +149,7 @@
             <div><strong>{{ artifact.artifact_type }}</strong></div>
             <div class="muted">{{ artifact.content_type }}</div>
             <div class="muted">{{ artifact.file_size_bytes }} bytes</div>
+            <div><a href="/lectures/{{ lecture.lecture_id }}/download/{{ artifact.artifact_type }}">Download</a></div>
           </div>
         {% endfor %}
       </div>

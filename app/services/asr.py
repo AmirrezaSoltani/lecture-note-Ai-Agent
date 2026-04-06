@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
+import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
@@ -115,12 +117,13 @@ class FasterWhisperASRProvider:
 
     def __init__(self, model_size: str | None = None) -> None:
         self.model_size = model_size or settings.whisper_model_size
-        self.device = settings.whisper_device
+        self.requested_device = (settings.whisper_device or "auto").strip().lower()
+        self.device = _resolve_whisper_device(self.requested_device)
         self.compute_type = settings.whisper_compute_type
         self._runtime_info = ASRRuntimeInfo(
             provider_name="faster_whisper",
             model_size=self.model_size,
-            requested_device=self.device,
+            requested_device=self.requested_device,
             requested_compute_type=self.compute_type,
             actual_device=self.device,
             actual_compute_type=self.compute_type,
@@ -151,7 +154,7 @@ class FasterWhisperASRProvider:
         self._runtime_info = ASRRuntimeInfo(
             provider_name="faster_whisper",
             model_size=self.model_size,
-            requested_device=self.device,
+            requested_device=self.requested_device,
             requested_compute_type=self.compute_type,
             actual_device=effective_device,
             actual_compute_type=effective_compute,
@@ -161,7 +164,7 @@ class FasterWhisperASRProvider:
         logger.info(
             "Loaded faster-whisper model size=%s requested_device=%s actual_device=%s requested_compute_type=%s actual_compute_type=%s backend=%s cuda_visible=%s hf_token_present=%s",
             self.model_size,
-            self.device,
+            self.requested_device,
             effective_device,
             self.compute_type,
             effective_compute,
@@ -200,7 +203,7 @@ class FasterWhisperASRProvider:
         self._runtime_info = ASRRuntimeInfo(
             provider_name="faster_whisper",
             model_size=self.model_size,
-            requested_device=self.device,
+            requested_device=self.requested_device,
             requested_compute_type=self.compute_type,
             actual_device=effective_device,
             actual_compute_type=effective_compute,
@@ -282,6 +285,36 @@ def _extract_compute_type(model: object, fallback: str) -> str:
         if text:
             return text
     return fallback
+
+
+def _resolve_whisper_device(requested_device: str) -> str:
+    requested = (requested_device or "auto").strip().lower()
+    if requested in {"cuda", "cpu"}:
+        return requested
+    if requested == "gpu":
+        return "cuda" if _cuda_available() else "cpu"
+    if requested in {"auto", "default", ""}:
+        return "cuda" if _cuda_available() else "cpu"
+    return requested
+
+
+def _cuda_available() -> bool:
+    try:
+        import torch  # type: ignore
+
+        if torch.cuda.is_available():
+            return True
+    except Exception:
+        pass
+
+    nvidia_smi = shutil.which("nvidia-smi")
+    if not nvidia_smi:
+        return False
+    try:
+        result = subprocess.run([nvidia_smi, "-L"], check=False, capture_output=True, text=True, timeout=2)
+    except Exception:
+        return False
+    return result.returncode == 0 and bool(result.stdout.strip())
 
 
 def build_asr_provider() -> ASRProvider:

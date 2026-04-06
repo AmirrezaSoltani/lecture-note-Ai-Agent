@@ -402,6 +402,7 @@ def lecture_status(lecture_id: str) -> JSONResponse:
     record = _get_lecture_or_404(lecture_id)
     latest_job = job_repository.latest_for_lecture(lecture_id)
     artifacts = artifact_repository.list_for_lecture(lecture_id)
+    artifact_lookup = {artifact.artifact_type: artifact.to_dict() for artifact in artifacts}
     performance_run = performance_repository.latest_for_lecture(lecture_id)
     bundle = _load_reviewed_bundle(record)
     asr_runtime = _resolve_asr_runtime(record, performance_run)
@@ -504,6 +505,7 @@ def lecture_detail(
 
     jobs = job_repository.list_for_lecture(lecture_id)
     artifacts = artifact_repository.list_for_lecture(lecture_id)
+    artifact_lookup = {artifact.artifact_type: artifact.to_dict() for artifact in artifacts}
     performance_run = performance_repository.latest_for_lecture(lecture_id)
     asr_runtime = _resolve_asr_runtime(record, performance_run)
     llm_runtime = _resolve_llm_runtime(record, performance_run)
@@ -532,6 +534,7 @@ def lecture_detail(
             "grouped_markers": grouped_markers,
             "jobs": jobs,
             "artifacts": artifacts,
+            "artifact_lookup": artifact_lookup,
             "performance_run": performance_run,
             "queue_backend": worker.backend_name,
             "active_workers": worker.active_count(),
